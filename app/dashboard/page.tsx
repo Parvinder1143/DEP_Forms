@@ -10,7 +10,6 @@ import { useRouter } from 'next/navigation'
 function isIdentityCardForm(form: any) {
   return Boolean(form?.identity_card_type || form?.employee_code || form?.request_type)
 }
-
 function isVehicleStickerForm(form: any) {
   return Boolean(form?.driving_license_number || form?.driving_license_valid_upto)
 }
