@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { VehicleStickerApplication, ApplicationVehicle, VehicleSticker, VehicleStickerApproval } from '@/db/schema'
 
 // ============================================================================
@@ -6,7 +6,7 @@ import { VehicleStickerApplication, ApplicationVehicle, VehicleSticker, VehicleS
 // ============================================================================
 
 export async function getVehicleApplication(id: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_sticker_applications')
     .select('*')
     .eq('id', id)
@@ -17,7 +17,7 @@ export async function getVehicleApplication(id: string) {
 }
 
 export async function getVehicleApplicationsByApplicant(applicantId: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_sticker_applications')
     .select('*')
     .eq('applicant_id', applicantId)
@@ -28,7 +28,7 @@ export async function getVehicleApplicationsByApplicant(applicantId: string) {
 }
 
 export async function getVehicleApplicationsByStatus(status: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_sticker_applications')
     .select('*')
     .eq('status', status)
@@ -39,10 +39,10 @@ export async function getVehicleApplicationsByStatus(status: string) {
 }
 
 export async function getPendingVehicleApplications() {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_sticker_applications')
     .select('*')
-    .in('status', ['SUBMITTED', 'PENDING_SUPERVISOR', 'PENDING_HOD', 'PENDING_AFFAIRS', 'PENDING_SECURITY'])
+    .in('status', ['SUBMITTED', 'PENDING_SUPERVISOR', 'PENDING_HOD', 'PENDING_HOSTEL_WARDEN', 'PENDING_AFFAIRS', 'PENDING_SECURITY'])
     .order('submitted_date', { ascending: true })
 
   if (error) throw error
@@ -50,7 +50,7 @@ export async function getPendingVehicleApplications() {
 }
 
 export async function createVehicleApplication(app: Omit<VehicleStickerApplication, 'id' | 'created_at' | 'updated_at'>) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_sticker_applications')
     .insert(app)
     .select()
@@ -61,7 +61,7 @@ export async function createVehicleApplication(app: Omit<VehicleStickerApplicati
 }
 
 export async function updateVehicleApplicationStatus(id: string, status: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_sticker_applications')
     .update({ status })
     .eq('id', id)
@@ -73,7 +73,7 @@ export async function updateVehicleApplicationStatus(id: string, status: string)
 }
 
 export async function updateVehicleApplication(id: string, updates: Partial<VehicleStickerApplication>) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_sticker_applications')
     .update(updates)
     .eq('id', id)
@@ -89,7 +89,7 @@ export async function updateVehicleApplication(id: string, updates: Partial<Vehi
 // ============================================================================
 
 export async function getApplicationVehicles(applicationId: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('application_vehicles')
     .select('*')
     .eq('application_id', applicationId)
@@ -100,7 +100,7 @@ export async function getApplicationVehicles(applicationId: string) {
 }
 
 export async function getApplicationVehicle(id: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('application_vehicles')
     .select('*')
     .eq('id', id)
@@ -111,7 +111,7 @@ export async function getApplicationVehicle(id: string) {
 }
 
 export async function getPrimaryVehicle(applicationId: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('application_vehicles')
     .select('*')
     .eq('application_id', applicationId)
@@ -123,7 +123,7 @@ export async function getPrimaryVehicle(applicationId: string) {
 }
 
 export async function addVehicleToApplication(vehicle: Omit<ApplicationVehicle, 'id' | 'created_at'>) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('application_vehicles')
     .insert(vehicle)
     .select()
@@ -134,7 +134,7 @@ export async function addVehicleToApplication(vehicle: Omit<ApplicationVehicle, 
 }
 
 export async function updateApplicationVehicle(id: string, updates: Partial<ApplicationVehicle>) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('application_vehicles')
     .update(updates)
     .eq('id', id)
@@ -146,7 +146,7 @@ export async function updateApplicationVehicle(id: string, updates: Partial<Appl
 }
 
 export async function removeVehicleFromApplication(id: string) {
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from('application_vehicles')
     .delete()
     .eq('id', id)
@@ -159,7 +159,7 @@ export async function removeVehicleFromApplication(id: string) {
 // ============================================================================
 
 export async function getVehicleSticker(id: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_stickers')
     .select('*')
     .eq('id', id)
@@ -170,7 +170,7 @@ export async function getVehicleSticker(id: string) {
 }
 
 export async function getVehicleStickerByNumber(stickerNumber: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_stickers')
     .select('*')
     .eq('sticker_number', stickerNumber)
@@ -181,7 +181,7 @@ export async function getVehicleStickerByNumber(stickerNumber: string) {
 }
 
 export async function getStickersByApplication(applicationId: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_stickers')
     .select('*')
     .eq('application_id', applicationId)
@@ -193,7 +193,7 @@ export async function getStickersByApplication(applicationId: string) {
 export async function getActiveStickers() {
   const today = new Date().toISOString().split('T')[0]
   
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_stickers')
     .select('*')
     .eq('status', 'ACTIVE')
@@ -206,7 +206,7 @@ export async function getActiveStickers() {
 export async function getExpiredStickers() {
   const today = new Date().toISOString().split('T')[0]
   
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_stickers')
     .select('*')
     .lt('valid_until', today)
@@ -217,7 +217,7 @@ export async function getExpiredStickers() {
 }
 
 export async function createVehicleSticker(sticker: Omit<VehicleSticker, 'id' | 'created_at' | 'updated_at'>) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_stickers')
     .insert(sticker)
     .select()
@@ -228,7 +228,7 @@ export async function createVehicleSticker(sticker: Omit<VehicleSticker, 'id' | 
 }
 
 export async function updateVehicleStickerStatus(id: string, status: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_stickers')
     .update({ status })
     .eq('id', id)
@@ -252,7 +252,7 @@ export async function reportStickerLost(id: string) {
 // ============================================================================
 
 export async function getVehicleApprovalsByApplication(applicationId: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_sticker_approvals')
     .select('*')
     .eq('application_id', applicationId)
@@ -263,7 +263,7 @@ export async function getVehicleApprovalsByApplication(applicationId: string) {
 }
 
 export async function getVehicleApprovalByStage(applicationId: string, stage: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_sticker_approvals')
     .select('*')
     .eq('application_id', applicationId)
@@ -275,7 +275,7 @@ export async function getVehicleApprovalByStage(applicationId: string, stage: st
 }
 
 export async function getPendingVehicleApprovalsForUser(userId: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_sticker_approvals')
     .select('*')
     .eq('approved_by', userId)
@@ -286,7 +286,7 @@ export async function getPendingVehicleApprovalsForUser(userId: string) {
 }
 
 export async function createVehicleApproval(approval: Omit<VehicleStickerApproval, 'id' | 'created_at'>) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_sticker_approvals')
     .insert(approval)
     .select()
@@ -297,7 +297,7 @@ export async function createVehicleApproval(approval: Omit<VehicleStickerApprova
 }
 
 export async function updateVehicleApprovalStatus(id: string, status: string, comments?: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_sticker_approvals')
     .update({ status, comments, approved_date: new Date().toISOString() })
     .eq('id', id)
@@ -356,7 +356,7 @@ export async function getVehicleApplicationWithDetails(id: string) {
 
 export async function getVehicleTypeIdsByCodes(codes: Array<'2W' | '4W'>) {
   const uniqueCodes = Array.from(new Set(codes))
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('vehicle_types')
     .select('id, code')
     .in('code', uniqueCodes)

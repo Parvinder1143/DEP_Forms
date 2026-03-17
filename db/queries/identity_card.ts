@@ -1,8 +1,9 @@
 import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { IdentityCardForm } from '../schema'
 
 export const createIdentityCardForm = async (data: Omit<IdentityCardForm, 'id' | 'created_at' | 'updated_at'>) => {
-  const { data: result, error } = await supabase
+  const { data: result, error } = await supabaseAdmin
     .from('identity_card_forms')
     .insert([data])
     .select()
@@ -13,7 +14,7 @@ export const createIdentityCardForm = async (data: Omit<IdentityCardForm, 'id' |
 }
 
 export const getIdentityCardFormsByApplicant = async (applicantId: string) => {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('identity_card_forms')
     .select('*')
     .eq('applicant_id', applicantId)
@@ -24,7 +25,7 @@ export const getIdentityCardFormsByApplicant = async (applicantId: string) => {
 }
 
 export const getIdentityCardFormById = async (id: string) => {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('identity_card_forms')
     .select('*')
     .eq('id', id)
@@ -38,7 +39,7 @@ export const updateIdentityCardForm = async (
   id: string,
   updates: Partial<IdentityCardForm>
 ) => {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('identity_card_forms')
     .update(updates)
     .eq('id', id)

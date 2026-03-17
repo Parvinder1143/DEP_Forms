@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
-const ADMIN_EMAIL = 'admin@iitrpr.ac.in'
-const ADMIN_ROLES = ['Super Admin', 'Institute Admin']
+const ADMIN_EMAILS = ['admin@iitrpr.ac.in']
+const ADMIN_ROLES = ['Super Admin', 'System Admin']
 
 type AppUser = {
   id: string
@@ -41,7 +41,7 @@ export async function getOrCreateAppUser(authUser: { id: string; email?: string 
       auth_id: authUser.id,
       email: authUser.email,
       full_name: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || 'User',
-      user_type: authUser.email?.toLowerCase() === ADMIN_EMAIL ? 'admin' : 'employee',
+      user_type: isAdminEmail(authUser.email) ? 'admin' : 'employee',
     })
     .select('*')
     .single()
@@ -64,7 +64,12 @@ export async function getUserRoleNames(userId: string): Promise<string[]> {
 }
 
 export function isAdminEmail(email?: string | null): boolean {
-  return (email || '').toLowerCase() === ADMIN_EMAIL
+  const normalized = (email || '').toLowerCase()
+  return ADMIN_EMAILS.includes(normalized)
+}
+
+export function isInstituteAdminEmail(email?: string | null): boolean {
+  return (email || '').toLowerCase() === 'institute_admin@iitrpr.ac.in'
 }
 
 export async function isAdminUser(userId: string, email?: string | null): Promise<boolean> {

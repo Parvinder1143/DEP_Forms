@@ -7,12 +7,43 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 
+function normalizeRole(role: string) {
+  return role.toLowerCase().replace(/&/g, 'and').replace(/\s+/g, ' ').trim()
+}
+
+function isEmailStakeholderRole(role: string) {
+  const normalized = normalizeRole(role)
+  return (
+    normalized.includes('section head') ||
+    normalized.includes('department head') ||
+    normalized === 'hod' ||
+    normalized.includes('deputy registrar') ||
+    normalized.includes('establish') ||
+    normalized.includes('student affairs') ||
+    normalized.includes('security officer') ||
+    normalized === 'registrar' ||
+    normalized === 'dean'
+  )
+}
+
 export default function Navbar() {
   const { user, signOut } = useAuth()
   const router = useRouter()
   const [showMenu, setShowMenu] = useState(false)
   const [showForms, setShowForms] = useState(false)
   const [roleNames, setRoleNames] = useState<string[]>([])
+
+  const resolveAccessToken = async () => {
+    const { data: sessionData } = await supabase.auth.getSession()
+    let token = sessionData.session?.access_token || null
+
+    if (!token) {
+      const { data: refreshData } = await supabase.auth.refreshSession()
+      token = refreshData.session?.access_token || null
+    }
+
+    return token
+  }
 
   const handleSignOut = async () => {
     await signOut()
@@ -27,15 +58,29 @@ export default function Navbar() {
 
     async function fetchRoles() {
       try {
-        const { data: sessionData } = await supabase.auth.getSession()
-        const token = sessionData.session?.access_token
+        let token = await resolveAccessToken()
         if (!token) return
 
-        const response = await fetch('/api/role-requests', {
+        let response = await fetch('/api/role-requests', {
           headers: {
             Authorization: `Bearer ${token}`,
           },
         })
+
+        if (response.status === 401) {
+          token = await resolveAccessToken()
+          if (!token) return
+
+          response = await fetch('/api/role-requests', {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          })
+        }
+
+        if (!response.ok) {
+          return
+        }
 
         const payload = await response.json()
         setRoleNames(Array.isArray(payload.roles) ? payload.roles : [])
@@ -48,10 +93,17 @@ export default function Navbar() {
   }, [user])
 
   const isInstituteUser = isInstituteEmail(user?.email)
-  const isAdminAccount = (user?.email || '').toLowerCase() === 'admin@iitrpr.ac.in' || roleNames.includes('Super Admin') || roleNames.includes('Institute Admin')
+  const normalizedUserEmail = (user?.email || '').toLowerCase()
+  const isSystemAdminAccount = normalizedUserEmail === 'admin@iitrpr.ac.in' || roleNames.includes('Super Admin') || roleNames.includes('System Admin')
+  const isInstituteAdminStakeholder = normalizedUserEmail === 'institute_admin@iitrpr.ac.in' || roleNames.includes('Institute Admin')
+  const isAdminAccount = isSystemAdminAccount || isInstituteAdminStakeholder
+  const showAdminLink = isSystemAdminAccount
+  const isEmailStakeholder = roleNames.some(isEmailStakeholderRole)
   const canAccessAllForms = !isInstituteUser || roleNames.length > 0 || isAdminAccount
 
-  const forms = [
+  const hideFormsForInstituteStakeholders = (isEmailStakeholder || isInstituteAdminStakeholder) && !isSystemAdminAccount
+
+  const forms = hideFormsForInstituteStakeholders ? [] : [
     ...(!isInstituteUser
       ? [
           { name: 'Email ID Request', href: '/forms/email-request' },
@@ -94,7 +146,7 @@ export default function Navbar() {
               <Link href="/dashboard" className="px-3 py-2 text-sm text-gray-600 rounded-lg transition-colors font-medium hover:text-zinc-900 hover:bg-zinc-100">
                 Dashboard
               </Link>
-              {isAdminAccount && (
+              {showAdminLink && (
                 <Link href="/admin" className="px-3 py-2 text-sm text-gray-600 rounded-lg transition-colors font-medium hover:text-zinc-900 hover:bg-zinc-100">
                   Admin
                 </Link>
@@ -141,7 +193,7 @@ export default function Navbar() {
                 {showMenu && (
                   <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-lg border border-gray-100 py-1 z-50" style={{ boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }}>
                     <Link href="/dashboard" className="block px-4 py-2 text-sm text-gray-600 hover:bg-zinc-100 hover:text-zinc-900 transition-colors" onClick={() => setShowMenu(false)}>Dashboard</Link>
-                    {isAdminAccount && (
+                    {showAdminLink && (
                       <Link href="/admin" className="block px-4 py-2 text-sm text-gray-600 hover:bg-zinc-100 hover:text-zinc-900 transition-colors" onClick={() => setShowMenu(false)}>Admin</Link>
                     )}
                     {forms.map((form) => (

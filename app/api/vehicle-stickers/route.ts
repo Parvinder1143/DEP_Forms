@@ -5,7 +5,7 @@ import {
   getVehicleTypeIdsByCodes,
 } from '@/db/queries/vehicle_stickers'
 import { isInstituteEmail } from '@/lib/access'
-import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { getAuthUserFromRequest, getOrCreateAppUser } from '@/lib/adminAccess'
 import { NextRequest, NextResponse } from 'next/server'
 
 type VehiclePayload = {
@@ -17,6 +17,26 @@ type VehiclePayload = {
 
 function resolveApplicantType(category?: string): 'Student' | 'Staff' {
   return category === 'REGULAR_STUDENT' ? 'Student' : 'Staff'
+}
+
+function normalizeDateInput(value?: string): string | null {
+  if (!value || typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+
+  // Accept native date input format.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed
+  }
+
+  // Accept dd-mm-yyyy or dd/mm/yyyy and convert to yyyy-mm-dd.
+  const match = trimmed.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/)
+  if (match) {
+    const [, dd, mm, yyyy] = match
+    return `${yyyy}-${mm}-${dd}`
+  }
+
+  return null
 }
 
 export async function POST(request: NextRequest) {
@@ -50,17 +70,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Each vehicle row must include registration number, type, make/model and colour.' }, { status: 400 })
     }
 
-    const token = request.headers.get('authorization')?.split(' ')[1]
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
-    if (authError || !user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const auth = await getAuthUserFromRequest(request)
+    if (!auth.user) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
 
-    if (!isInstituteEmail(user.email)) {
+    const appUser = await getOrCreateAppUser(auth.user)
+
+    if (!isInstituteEmail(auth.user.email)) {
       return NextResponse.json({ error: 'Access denied for this form' }, { status: 403 })
+    }
+
+    const normalizedLicenseDate = normalizeDateInput(data.driving_license_validity)
+    if (!normalizedLicenseDate) {
+      return NextResponse.json({ error: 'Invalid driving license validity date format.' }, { status: 400 })
     }
 
     const vehicleTypeMap = await getVehicleTypeIdsByCodes(vehicles.map((vehicle) => vehicle.vehicle_type))
@@ -73,7 +96,7 @@ export async function POST(request: NextRequest) {
     const applicantType = resolveApplicantType(data.applicant_category)
 
     const application = await createVehicleApplication({
-      applicant_id: user.id,
+      applicant_id: appUser.id,
       applicant_name: data.full_name,
       applicant_type: applicantType,
       designation: data.designation,
@@ -83,10 +106,10 @@ export async function POST(request: NextRequest) {
       phone_number: data.mobile_number,
       email: data.email,
       driving_license_number: data.driving_license_number,
-      driving_license_valid_upto: data.driving_license_validity,
+      driving_license_valid_upto: normalizedLicenseDate,
       status: 'SUBMITTED',
       submitted_date: new Date().toISOString(),
-      submitted_by: user.id
+      submitted_by: appUser.id
     })
 
     for (let index = 0; index < vehicles.length; index += 1) {
@@ -111,20 +134,18 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    const token = request.headers.get('authorization')?.split(' ')[1]
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
-    if (authError || !user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const auth = await getAuthUserFromRequest(request)
+    if (!auth.user) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
 
-    if (!isInstituteEmail(user.email)) {
+    const appUser = await getOrCreateAppUser(auth.user)
+
+    if (!isInstituteEmail(auth.user.email)) {
       return NextResponse.json([], { status: 200 })
     }
 
-    const applications = await getVehicleApplicationsByApplicant(user.id)
+    const applications = await getVehicleApplicationsByApplicant(appUser.id)
     return NextResponse.json(applications)
   } catch (error) {
     console.error('Error fetching applications:', error)

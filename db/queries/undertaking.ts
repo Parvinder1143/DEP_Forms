@@ -1,8 +1,8 @@
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { UndertakingForm } from '../schema'
 
 export const createUndertakingForm = async (data: Omit<UndertakingForm, 'id' | 'created_at' | 'updated_at'>) => {
-  const { data: result, error } = await supabase
+  const { data: result, error } = await supabaseAdmin
     .from('undertaking_forms')
     .insert([data])
     .select()
@@ -13,7 +13,7 @@ export const createUndertakingForm = async (data: Omit<UndertakingForm, 'id' | '
 }
 
 export const getUndertakingFormsByApplicant = async (applicantId: string) => {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('undertaking_forms')
     .select('*')
     .eq('applicant_id', applicantId)
@@ -24,7 +24,7 @@ export const getUndertakingFormsByApplicant = async (applicantId: string) => {
 }
 
 export const getUndertakingFormById = async (id: string) => {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('undertaking_forms')
     .select('*')
     .eq('id', id)
@@ -38,7 +38,7 @@ export const updateUndertakingForm = async (
   id: string,
   updates: Partial<UndertakingForm>
 ) => {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('undertaking_forms')
     .update(updates)
     .eq('id', id)
@@ -50,7 +50,7 @@ export const updateUndertakingForm = async (
 }
 
 export const getUndertakingAcceptances = async (formId: string) => {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('undertaking_acceptances')
     .select('*')
     .eq('undertaking_form_id', formId)

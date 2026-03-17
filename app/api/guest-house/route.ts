@@ -1,18 +1,16 @@
 import { createReservation, getReservationsByProposer, generateReservationNumber } from '@/db/queries/guest_house'
-import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { getAuthUserFromRequest, getOrCreateAppUser } from '@/lib/adminAccess'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(request: NextRequest) {
   try {
     const data = await request.json()
-    const token = request.headers.get('authorization')?.split(' ')[1]
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const auth = await getAuthUserFromRequest(request)
+    if (!auth.user) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
-    if (authError || !user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+
+    const appUser = await getOrCreateAppUser(auth.user)
 
     const requiredStringFields = [
       'guest_name',
@@ -89,7 +87,7 @@ export async function POST(request: NextRequest) {
 
     const reservation = await createReservation({
       reservation_number: reservationNumber,
-      proposer_id: user.id,
+      proposer_id: appUser.id,
       proposer_name: data.proposer_name.trim(),
       proposer_designation: data.proposer_designation.trim(),
       proposer_department: data.proposer_department.trim(),
@@ -119,7 +117,7 @@ export async function POST(request: NextRequest) {
       payment_status: 'PENDING',
       status: 'SUBMITTED',
       submitted_date: new Date().toISOString(),
-      submitted_by: user.id
+      submitted_by: appUser.id
     })
 
     return NextResponse.json(reservation, { status: 201 })
@@ -131,16 +129,14 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    const token = request.headers.get('authorization')?.split(' ')[1]
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
-    if (authError || !user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const auth = await getAuthUserFromRequest(request)
+    if (!auth.user) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
 
-    const reservations = await getReservationsByProposer(user.id)
+    const appUser = await getOrCreateAppUser(auth.user)
+
+    const reservations = await getReservationsByProposer(appUser.id)
     return NextResponse.json(reservations)
   } catch (error) {
     console.error('Error fetching reservations:', error)

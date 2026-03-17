@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { GuestHouseReservation, GuestHouseApproval, GuestHouseCheckIn, GuestHouseAdditionalCharge } from '@/db/schema'
 
 // ============================================================================
@@ -28,7 +29,7 @@ export async function getReservationByNumber(reservationNumber: string) {
 }
 
 export async function getReservationsByProposer(proposerId: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('guest_house_reservations')
     .select('*')
     .eq('proposer_id', proposerId)
@@ -103,7 +104,7 @@ export async function getPendingReservations() {
 }
 
 export async function createReservation(reservation: Omit<GuestHouseReservation, 'id' | 'created_at' | 'updated_at'>) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('guest_house_reservations')
     .insert(reservation)
     .select()

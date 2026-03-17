@@ -1,6 +1,6 @@
 import { createIdentityCardForm, getIdentityCardFormsByApplicant } from '@/db/queries/identity_card'
 import { isInstituteEmail } from '@/lib/access'
-import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { getAuthUserFromRequest, getOrCreateAppUser } from '@/lib/adminAccess'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(request: NextRequest) {
@@ -35,21 +35,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Reason is required for renewal/duplicate applications.' }, { status: 400 })
     }
 
-    const token = request.headers.get('authorization')?.split(' ')[1]
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
-    if (authError || !user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const auth = await getAuthUserFromRequest(request)
+    if (!auth.user) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
 
-    if (!isInstituteEmail(user.email)) {
+    const appUser = await getOrCreateAppUser(auth.user)
+
+    if (!isInstituteEmail(auth.user.email)) {
       return NextResponse.json({ error: 'Access denied for this form' }, { status: 403 })
     }
 
     const identityCard = await createIdentityCardForm({
-      applicant_id: user.id,
+      applicant_id: appUser.id,
       applicant_name: data.employee_name,
       employee_code: data.employee_code,
       designation: data.designation,
@@ -70,7 +68,7 @@ export async function POST(request: NextRequest) {
       identity_card_type: 'EMPLOYEE_ID',
       status: 'SUBMITTED',
       submitted_date: new Date().toISOString(),
-      submitted_by: user.id
+      submitted_by: appUser.id
     })
 
     return NextResponse.json(identityCard, { status: 201 })
@@ -82,20 +80,18 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    const token = request.headers.get('authorization')?.split(' ')[1]
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
-    if (authError || !user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const auth = await getAuthUserFromRequest(request)
+    if (!auth.user) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
 
-    if (!isInstituteEmail(user.email)) {
+    const appUser = await getOrCreateAppUser(auth.user)
+
+    if (!isInstituteEmail(auth.user.email)) {
       return NextResponse.json([], { status: 200 })
     }
 
-    const forms = await getIdentityCardFormsByApplicant(user.id)
+    const forms = await getIdentityCardFormsByApplicant(appUser.id)
     return NextResponse.json(forms)
   } catch (error) {
     console.error('Error fetching identity card forms:', error)

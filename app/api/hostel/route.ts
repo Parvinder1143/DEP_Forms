@@ -1,21 +1,19 @@
 import { createHostelForm, getHostelFormByStudent } from '@/db/queries/hostel'
 import { isInstituteEmail } from '@/lib/access'
-import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { getAuthUserFromRequest, getOrCreateAppUser } from '@/lib/adminAccess'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(request: NextRequest) {
   try {
     const data = await request.json()
-    const token = request.headers.get('authorization')?.split(' ')[1]
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
-    if (authError || !user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const auth = await getAuthUserFromRequest(request)
+    if (!auth.user) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
 
-    if (!isInstituteEmail(user.email)) {
+    const appUser = await getOrCreateAppUser(auth.user)
+
+    if (!isInstituteEmail(auth.user.email)) {
       return NextResponse.json({ error: 'Access denied for this form' }, { status: 403 })
     }
 
@@ -42,7 +40,7 @@ export async function POST(request: NextRequest) {
       undertaking_accepted: false,
       status: 'SUBMITTED',
       submitted_date: new Date().toISOString(),
-      submitted_by: user.id
+      submitted_by: appUser.id
     })
 
     return NextResponse.json(form, { status: 201 })
@@ -54,17 +52,13 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    const token = request.headers.get('authorization')?.split(' ')[1]
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
-    if (authError || !user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const auth = await getAuthUserFromRequest(request)
+    if (!auth.user) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
     const studentId = new URL(request.url).searchParams.get('studentId')
 
-    if (!isInstituteEmail(user.email)) {
+    if (!isInstituteEmail(auth.user.email)) {
       return NextResponse.json(null, { status: 200 })
     }
 
