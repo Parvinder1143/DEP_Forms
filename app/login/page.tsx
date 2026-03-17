@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/app/context/AuthContext'
 import Link from 'next/link'
+import DotGridBackground from '@/app/components/DotGridBackground'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -35,10 +36,11 @@ export default function LoginPage() {
 
   return (
     <div className="relative min-h-screen flex items-center justify-center px-4 pt-16 overflow-hidden page-enter" style={{ background: 'linear-gradient(135deg, #ffffff 0%, #f4f4f5 45%, #ecfdf3 75%, #f5f3ff 100%)' }}>
-      <div className="pointer-events-none absolute -top-16 -left-10 w-72 h-72 rounded-full bg-emerald-300/30 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-24 -right-10 w-80 h-80 rounded-full bg-violet-300/20 blur-3xl" />
-      <div className="pointer-events-none absolute top-1/3 right-1/4 w-56 h-56 rounded-full bg-amber-200/25 blur-3xl" />
-      <div className="w-full max-w-md">
+      <DotGridBackground />
+      <div className="pointer-events-none absolute -top-16 -left-10 w-72 h-72 rounded-full bg-emerald-300/30 blur-3xl" style={{ zIndex: 1 }} />
+      <div className="pointer-events-none absolute -bottom-24 -right-10 w-80 h-80 rounded-full bg-violet-300/20 blur-3xl" style={{ zIndex: 1 }} />
+      <div className="pointer-events-none absolute top-1/3 right-1/4 w-56 h-56 rounded-full bg-amber-200/25 blur-3xl" style={{ zIndex: 1 }} />
+      <div className="w-full max-w-md" style={{ position: 'relative', zIndex: 2 }}>
 
         {/* Logo + heading */}
         <div className="text-center mb-8">

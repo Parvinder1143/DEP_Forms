@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { HostelInformationForm, HostelInformationApproval, HostelRoomAssignment, HostelMessAssignment } from '@/db/schema'
 
 // ============================================================================
@@ -17,7 +18,7 @@ export async function getHostelForm(id: string) {
 }
 
 export async function getHostelFormByStudent(studentId: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('hostel_information_forms')
     .select('*')
     .eq('student_id', studentId)
@@ -60,7 +61,7 @@ export async function getPendingHostelForms() {
 }
 
 export async function createHostelForm(form: Omit<HostelInformationForm, 'id' | 'created_at' | 'updated_at'>) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('hostel_information_forms')
     .insert(form)
     .select()

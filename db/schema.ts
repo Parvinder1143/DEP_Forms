@@ -100,6 +100,9 @@ export interface UserRole {
 
 export type EmailRequestStatus = 
   | 'SUBMITTED'
+  | 'PENDING_LEVEL_1'
+  | 'PENDING_LEVEL_2'
+  | 'PENDING_LEVEL_3'
   | 'PENDING_OFFICER'
   | 'APPROVED_BY_OFFICER'
   | 'PENDING_AUTHORITY'
@@ -109,7 +112,7 @@ export type EmailRequestStatus =
   | 'REJECTED'
   | 'CLOSED'
 
-export type ApprovalStage = 'REPORTING_OFFICER' | 'FORWARDING_AUTHORITY' | 'IT_ADMIN'
+export type ApprovalStage = 'REPORTING_OFFICER' | 'FORWARDING_AUTHORITY' | 'IT_ADMIN' | 'LEVEL_1' | 'LEVEL_2' | 'LEVEL_3'
 export type ApprovalStatus = 'APPROVED' | 'REJECTED' | 'PENDING' | 'CLARIFICATION_NEEDED'
 
 export interface EmailIdRequest {
@@ -140,6 +143,9 @@ export interface EmailIdRequest {
   approval_processed_by_user_id?: string
   approval_processed_by_name?: string
   approval_processed_at?: string
+  approval_remark?: string
+  current_approval_stage?: string
+  approval_level?: number
   status: EmailRequestStatus
   assigned_email_id?: string
   email_created_date?: string
@@ -183,6 +189,8 @@ export type VehicleApplicationStatus =
   | 'APPROVED_BY_SUPERVISOR'
   | 'PENDING_HOD'
   | 'APPROVED_BY_HOD'
+  | 'PENDING_HOSTEL_WARDEN'
+  | 'APPROVED_BY_HOSTEL_WARDEN'
   | 'PENDING_AFFAIRS'
   | 'APPROVED_BY_AFFAIRS'
   | 'PENDING_SECURITY'
@@ -205,6 +213,12 @@ export interface VehicleStickerApplication {
   driving_license_number: string
   driving_license_valid_upto: string
   status: VehicleApplicationStatus
+  approval_remark?: string
+  approval_processed_by_user_id?: string
+  approval_processed_by_name?: string
+  approval_processed_at?: string
+  current_approval_stage?: string
+  approval_level?: number
   submitted_date: string
   submitted_by: string
   created_at: string
@@ -240,7 +254,7 @@ export interface VehicleSticker {
 export interface VehicleStickerApproval {
   id: string
   application_id: string
-  approval_stage: 'SUPERVISOR' | 'HOD' | 'STUDENT_AFFAIRS' | 'SECURITY'
+  approval_stage: 'SUPERVISOR' | 'HOD' | 'HOSTEL_WARDEN' | 'STUDENT_AFFAIRS' | 'SECURITY'
   approved_by: string
   status: ApprovalStatus
   comments?: string
@@ -389,6 +403,12 @@ export interface IdentityCardForm {
   photo_document_url: string
   identity_card_type: 'EMPLOYEE_ID'
   status: 'SUBMITTED' | 'APPROVED_HOD' | 'APPROVED_DIRECTOR' | 'REJECTED' | 'ISSUED' | 'CANCELLED'
+  approval_remark?: string
+  approval_processed_by_user_id?: string
+  approval_processed_by_name?: string
+  approval_processed_at?: string
+  current_approval_stage?: string
+  approval_level?: number
   submitted_date: string
   submitted_by: string
   card_issued_date?: string
@@ -444,6 +464,10 @@ export interface UndertakingForm {
   student_signature_name: string
   parent_signature_name: string
   status: 'SUBMITTED' | 'REVIEWED' | 'ACCEPTED' | 'REJECTED'
+  reviewer_remarks?: string
+  reviewed_by_user_id?: string
+  reviewed_by_name?: string
+  reviewed_at?: string
   submitted_date: string
   submitted_by: string
   created_at: string

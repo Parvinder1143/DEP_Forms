@@ -1,6 +1,6 @@
 import { createUndertakingForm, getUndertakingFormsByApplicant } from '@/db/queries/undertaking'
 import { isInstituteEmail } from '@/lib/access'
-import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { getAuthUserFromRequest, getOrCreateAppUser } from '@/lib/adminAccess'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(request: NextRequest) {
@@ -37,16 +37,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Declaration must be accepted before submission.' }, { status: 400 })
     }
 
-    const token = request.headers.get('authorization')?.split(' ')[1]
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
-    if (authError || !user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const auth = await getAuthUserFromRequest(request)
+    if (!auth.user) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
 
-    if (!isInstituteEmail(user.email)) {
+    const appUser = await getOrCreateAppUser(auth.user)
+
+    if (!isInstituteEmail(auth.user.email)) {
       return NextResponse.json({ error: 'Access denied for this form' }, { status: 403 })
     }
 
@@ -60,7 +58,7 @@ export async function POST(request: NextRequest) {
     }
 
     const undertaking = await createUndertakingForm({
-      applicant_id: user.id,
+      applicant_id: appUser.id,
       student_name: data.student_name,
       entry_number: data.entry_number || undefined,
       course_name: data.course_name,
@@ -91,7 +89,7 @@ export async function POST(request: NextRequest) {
       parent_signature_name: data.parent_signature_name,
       status: 'SUBMITTED',
       submitted_date: new Date().toISOString(),
-      submitted_by: user.id
+      submitted_by: appUser.id
     })
 
     return NextResponse.json(undertaking, { status: 201 })
@@ -103,20 +101,18 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    const token = request.headers.get('authorization')?.split(' ')[1]
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
-    if (authError || !user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const auth = await getAuthUserFromRequest(request)
+    if (!auth.user) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
 
-    if (!isInstituteEmail(user.email)) {
+    const appUser = await getOrCreateAppUser(auth.user)
+
+    if (!isInstituteEmail(auth.user.email)) {
       return NextResponse.json([], { status: 200 })
     }
 
-    const forms = await getUndertakingFormsByApplicant(user.id)
+    const forms = await getUndertakingFormsByApplicant(appUser.id)
     return NextResponse.json(forms)
   } catch (error) {
     console.error('Error fetching undertaking forms:', error)
