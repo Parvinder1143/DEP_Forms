@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/app/context/AuthContext'
 import { isInstituteEmail } from '@/lib/access'
@@ -273,6 +273,8 @@ export default function DashboardPage() {
   const [roleRequestStatus, setRoleRequestStatus] = useState<string | null>(null)
   const [roleLoading, setRoleLoading] = useState(true)
   const [dataLoading, setDataLoading] = useState(true)
+  const [apiCanReviewEmailQueue, setApiCanReviewEmailQueue] = useState(false)
+  const [apiCanViewIdentityQueue, setApiCanViewIdentityQueue] = useState(false)
   const [showNotificationPanel, setShowNotificationPanel] = useState(false)
   const [showEmailQueue, setShowEmailQueue] = useState(false)
   const [emailQueueLoading, setEmailQueueLoading] = useState(false)
@@ -461,16 +463,18 @@ export default function DashboardPage() {
   const allowedForms = getAllowedForms(isInstituteUser, roleNames)
   const primaryRole = roleNames[0] || null
   const canReviewEmailQueue = roleNames.some(isEmailStakeholderRole)
+  const canReviewEmailQueueEffective = canReviewEmailQueue || apiCanReviewEmailQueue
   const canReviewVehicleQueue = roleNames.some(isVehicleQueueStakeholderRole)
   const canReviewIdentityQueue = roleNames.some(isIdentityQueueStakeholderRole)
+  const canReviewIdentityQueueEffective = canReviewIdentityQueue || apiCanViewIdentityQueue
   const canReviewUndertakingQueue = roleNames.some(isInstituteAdminRole) || isInstituteAdminStakeholderEmail
-  const canReviewAnyQueue = canReviewEmailQueue || canReviewVehicleQueue || canReviewIdentityQueue || canReviewUndertakingQueue
+  const canReviewAnyQueue = canReviewEmailQueueEffective || canReviewVehicleQueue || canReviewIdentityQueueEffective || canReviewUndertakingQueue
   const isStakeholderOnly = canReviewAnyQueue && allowedForms.length === 0
   const pendingEmailQueueItems = emailQueueItems.filter((item) => EMAIL_PENDING_STATUSES.includes((item.status || '').toUpperCase()))
   const closedEmailQueueItems = emailQueueItems.filter((item) => EMAIL_CLOSED_STATUSES.includes((item.status || '').toUpperCase()))
   const pendingVehicleQueueItems = vehicleQueueItems.filter((item) => VEHICLE_PENDING_STATUSES.includes((item.status || '').toUpperCase()))
   const closedVehicleQueueItems = vehicleQueueItems.filter((item) => VEHICLE_CLOSED_STATUSES.includes((item.status || '').toUpperCase()))
-  const pendingIdentityQueueItems = identityQueueItems.filter((item) => IDENTITY_PENDING_STATUSES.includes((item.status || '').toUpperCase()))
+  const pendingIdentityQueueItems = identityQueueItems.filter((item) => !IDENTITY_CLOSED_STATUSES.includes((item.status || '').toUpperCase()))
   const closedIdentityQueueItems = identityQueueItems.filter((item) => IDENTITY_CLOSED_STATUSES.includes((item.status || '').toUpperCase()))
   const pendingUndertakingQueueItems = undertakingQueueItems.filter((item) => UNDERTAKING_PENDING_STATUSES.includes((item.status || '').toUpperCase()))
   const closedUndertakingQueueItems = undertakingQueueItems.filter((item) => UNDERTAKING_CLOSED_STATUSES.includes((item.status || '').toUpperCase()))
@@ -479,10 +483,10 @@ export default function DashboardPage() {
   const actionablePendingVehicleQueueItems = pendingVehicleQueueItems.filter((item) => item.can_take_action !== false)
   const actionablePendingUndertakingQueueItems = pendingUndertakingQueueItems
   const stakeholderNotificationItems = [
-    canReviewEmailQueue ? { key: 'Email Queue', count: actionablePendingEmailQueueItems.length } : null,
-    canReviewIdentityQueue ? { key: 'Identity Queue', count: actionablePendingIdentityQueueItems.length } : null,
-    canReviewVehicleQueue ? { key: 'Vehicle Queue', count: actionablePendingVehicleQueueItems.length } : null,
-    canReviewUndertakingQueue ? { key: 'Undertaking Queue', count: actionablePendingUndertakingQueueItems.length } : null,
+    canReviewEmailQueueEffective ? { key: 'Email Queue', count: pendingEmailQueueItems.length } : null,
+    canReviewIdentityQueueEffective ? { key: 'Identity Queue', count: pendingIdentityQueueItems.length } : null,
+    canReviewVehicleQueue ? { key: 'Vehicle Queue', count: pendingVehicleQueueItems.length } : null,
+    canReviewUndertakingQueue ? { key: 'Undertaking Queue', count: pendingUndertakingQueueItems.length } : null,
   ].filter(Boolean) as Array<{ key: string; count: number }>
   const totalPendingApprovals = stakeholderNotificationItems.reduce((sum, item) => sum + item.count, 0)
 
@@ -505,7 +509,7 @@ export default function DashboardPage() {
   const getSelectedIds = (selection: Record<string, boolean>) => Object.keys(selection).filter((id) => selection[id])
 
   const fetchStakeholderEmailQueue = async () => {
-    if (!canReviewEmailQueue) return
+    if (!canReviewEmailQueueEffective) return
 
     setEmailQueueLoading(true)
     setEmailQueueError(null)
@@ -542,6 +546,7 @@ export default function DashboardPage() {
       }
 
       const payload = await response.json()
+      setApiCanReviewEmailQueue(Boolean(payload?.currentUser?.canApproveEmailRequests))
       setEmailQueueItems(Array.isArray(payload?.queues?.latestPendingEmailForms) ? payload.queues.latestPendingEmailForms : [])
       setSelectedEmailItems({})
     } catch (error) {
@@ -563,7 +568,7 @@ export default function DashboardPage() {
   }
 
   const fetchStakeholderIdentityQueue = async () => {
-    if (!canReviewIdentityQueue) return
+    if (!canReviewIdentityQueueEffective) return
 
     setIdentityQueueLoading(true)
     setIdentityQueueError(null)
@@ -973,7 +978,7 @@ export default function DashboardPage() {
   }
 
   const refreshApprovalNotifications = async () => {
-    if (!canReviewAnyQueue) return
+    if (!user) return
 
     try {
       let token = await resolveAccessToken()
@@ -999,12 +1004,15 @@ export default function DashboardPage() {
       if (!response.ok) return
 
       const payload = await response.json()
+      const currentUser = payload?.currentUser || {}
       const queues = payload?.queues || {}
+      setApiCanReviewEmailQueue(Boolean(currentUser.canApproveEmailRequests))
+      setApiCanViewIdentityQueue(Boolean(currentUser.canViewIdentityQueue))
 
-      if (canReviewEmailQueue) {
+      if (canReviewEmailQueue || currentUser.canApproveEmailRequests) {
         setEmailQueueItems(Array.isArray(queues.latestPendingEmailForms) ? queues.latestPendingEmailForms : [])
       }
-      if (canReviewIdentityQueue) {
+      if (canReviewIdentityQueue || currentUser.canViewIdentityQueue) {
         setIdentityQueueItems(Array.isArray(queues.latestPendingIdentityForms) ? queues.latestPendingIdentityForms : [])
       }
       if (canReviewVehicleQueue) {
@@ -1019,7 +1027,7 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    if (!user || roleLoading || !canReviewAnyQueue) return
+    if (!user || roleLoading) return
 
     refreshApprovalNotifications()
     const intervalId = window.setInterval(() => {
@@ -1027,7 +1035,7 @@ export default function DashboardPage() {
     }, 60000)
 
     return () => window.clearInterval(intervalId)
-  }, [user, roleLoading, canReviewAnyQueue, canReviewEmailQueue, canReviewIdentityQueue, canReviewVehicleQueue, canReviewUndertakingQueue])
+  }, [user, roleLoading, canReviewEmailQueue, canReviewIdentityQueue, canReviewVehicleQueue, canReviewUndertakingQueue])
 
   const handleToggleUndertakingQueue = async () => {
     const next = !showUndertakingQueue
@@ -1580,7 +1588,7 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {canReviewEmailQueue && (
+        {canReviewEmailQueueEffective && (
           <div className="mb-8 rounded-xl section-glass border border-amber-200 bg-amber-50 px-5 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-amber-900">Email Approval Queue Access</p>
@@ -1597,7 +1605,7 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {canReviewIdentityQueue && (
+        {canReviewIdentityQueueEffective && (
           <div className="mb-8 rounded-xl section-glass border border-amber-200 bg-amber-50 px-5 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-amber-900">Identity Card Queue Access</p>
@@ -1648,7 +1656,7 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {canReviewEmailQueue && showEmailQueue && (
+        {canReviewEmailQueueEffective && showEmailQueue && (
           <section className="mb-8 pop-panel section-glass rounded-xl border border-gray-200 shadow-sm p-6">
             <h2 className="text-2xl font-semibold text-gray-900 mb-6">Pending Email Form Queue</h2>
 
@@ -1744,8 +1752,8 @@ export default function DashboardPage() {
                             </thead>
                             <tbody className="divide-y divide-gray-100">
                               {pendingEmailQueueItems.map((item) => (
-                                <>
-                                  <tr key={item.id} className="hover:bg-gray-50 align-top">
+                                <Fragment key={item.id}>
+                                  <tr className="hover:bg-gray-50 align-top">
                                     <td className="px-3 py-2">
                                       <input
                                         type="checkbox"
@@ -1822,7 +1830,7 @@ export default function DashboardPage() {
                                       </td>
                                     </tr>
                                   )}
-                                </>
+                                </Fragment>
                               ))}
                             </tbody>
                           </table>
@@ -1837,55 +1845,44 @@ export default function DashboardPage() {
                     {closedEmailQueueItems.length === 0 && <p className="text-sm text-gray-500">No closed requests yet.</p>}
 
                     {closedEmailQueueItems.length > 0 && (
-                      <div className="space-y-3 max-h-[68vh] overflow-y-auto pr-1">
-                        {closedEmailQueueItems.map((item) => (
-                          <div key={item.id} className={`rounded-xl section-glass border p-4 ${
-                            ['REJECTED','CANCELLED'].includes((item.status||'').toUpperCase())
-                              ? 'border-red-200 bg-red-50'
-                              : 'border-gray-200 bg-gray-50'
-                          }`}>
-                            <div className="flex justify-between items-center gap-3">
-                              <div>
-                                <p className="text-gray-900 font-medium text-sm">{item.applicant_name || 'Applicant'}</p>
-                                <p className="text-xs text-gray-700 mt-0.5">Employee Code / Org ID: {item.organisation_id || '-'}</p>
-                                <p className="text-xs text-gray-500 mt-0.5">{item.submitted_date ? new Date(item.submitted_date).toLocaleString() : 'No date'}</p>
-                              </div>
-                              <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${getStatusBadge(item.status)}`}>
-                                {item.status}
-                              </span>
-                            </div>
+                      <div className="max-h-[68vh] overflow-auto rounded-lg border border-gray-200 bg-white">
+                        <table className="min-w-full text-xs md:text-sm">
+                          <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
+                            <tr>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Applicant</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Org ID</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Department</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Status</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Submitted</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Details</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {closedEmailQueueItems.map((item) => (
+                              <Fragment key={item.id}>
+                                <tr className="hover:bg-gray-50 align-top">
+                                  <td className="px-3 py-2 font-medium text-gray-900">{item.applicant_name || 'Applicant'}</td>
+                                  <td className="px-3 py-2 text-gray-700">{item.organisation_id || '-'}</td>
+                                  <td className="px-3 py-2 text-gray-700">{item.department_section || '-'}</td>
+                                  <td className="px-3 py-2"><span className={`text-xs font-semibold px-2 py-1 rounded-full ${getStatusBadge(item.status)}`}>{item.status}</span></td>
+                                  <td className="px-3 py-2 text-gray-600">{item.submitted_date ? new Date(item.submitted_date).toLocaleString() : 'No date'}</td>
+                                  <td className="px-3 py-2"><button type="button" onClick={() => setExpandedEmailDetails((prev) => ({ ...prev, [item.id]: !prev[item.id] }))} className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-100">{expandedEmailDetails[item.id] ? 'Hide Form' : 'View Full Form'}</button></td>
+                                </tr>
 
-                            <button
-                              type="button"
-                              onClick={() => setExpandedEmailDetails((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
-                              className="mt-3 inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-100 transition"
-                            >
-                              {expandedEmailDetails[item.id] ? 'Hide full details' : 'Show full details'}
-                              <svg
-                                className={`h-4 w-4 transition-transform ${expandedEmailDetails[item.id] ? 'rotate-180' : ''}`}
-                                viewBox="0 0 20 20"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                              >
-                                <path d="M5 7.5L10 12.5L15 7.5" strokeLinecap="round" strokeLinejoin="round" />
-                              </svg>
-                            </button>
-
-                            {expandedEmailDetails[item.id] && (
-                              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                                <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
-                                  <p className="text-xs text-gray-500">Assigned Email ID</p>
-                                  <p className="font-medium text-gray-900">{item.assigned_email_id || '-'}</p>
-                                </div>
-                                <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
-                                  <p className="text-xs text-gray-500">Approved By</p>
-                                  <p className="font-medium text-gray-900">{item.approval_processed_by_name || '-'}</p>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        ))}
+                                {expandedEmailDetails[item.id] && (
+                                  <tr className="bg-gray-50">
+                                    <td colSpan={6} className="px-3 py-3">
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                                        <div className="rounded-lg border border-gray-200 bg-white px-3 py-2"><p className="text-xs text-gray-500">Assigned Email ID</p><p className="font-medium text-gray-900">{item.assigned_email_id || '-'}</p></div>
+                                        <div className="rounded-lg border border-gray-200 bg-white px-3 py-2"><p className="text-xs text-gray-500">Approved By</p><p className="font-medium text-gray-900">{item.approval_processed_by_name || '-'}</p></div>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </Fragment>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     )}
                   </div>
@@ -1895,7 +1892,7 @@ export default function DashboardPage() {
           </section>
         )}
 
-        {canReviewIdentityQueue && showIdentityQueue && (
+        {canReviewIdentityQueueEffective && showIdentityQueue && (
           <section className="mb-8 pop-panel section-glass rounded-xl border border-gray-200 shadow-sm p-6">
             <h2 className="text-2xl font-semibold text-gray-900 mb-6">Identity Card Queue</h2>
 
@@ -1991,8 +1988,8 @@ export default function DashboardPage() {
                             </thead>
                             <tbody className="divide-y divide-gray-100">
                               {pendingIdentityQueueItems.map((item) => (
-                                <>
-                                  <tr key={item.id} className="hover:bg-gray-50 align-top">
+                                <Fragment key={item.id}>
+                                  <tr className="hover:bg-gray-50 align-top">
                                     <td className="px-3 py-2">
                                       <input
                                         type="checkbox"
@@ -2073,7 +2070,7 @@ export default function DashboardPage() {
                                       </td>
                                     </tr>
                                   )}
-                                </>
+                                </Fragment>
                               ))}
                             </tbody>
                           </table>
@@ -2088,59 +2085,52 @@ export default function DashboardPage() {
                     {closedIdentityQueueItems.length === 0 && <p className="text-sm text-gray-500">No completed requests yet.</p>}
 
                     {closedIdentityQueueItems.length > 0 && (
-                      <div className="space-y-3 max-h-[68vh] overflow-y-auto pr-1">
-                        {closedIdentityQueueItems.map((item) => (
-                          <div key={item.id} className={`rounded-xl section-glass border p-4 ${
-                            ['REJECTED','CANCELLED'].includes((item.status||'').toUpperCase())
-                              ? 'border-red-200 bg-red-50'
-                              : 'border-gray-200 bg-gray-50'
-                          }`}>
-                            <div className="flex justify-between items-center gap-3">
-                              <div>
-                                <p className="text-gray-900 font-medium text-sm">{item.applicant_name || 'Applicant'}</p>
-                                <p className="text-xs text-gray-700 mt-0.5">Employee Code: {item.employee_code || '-'}</p>
-                                <p className="text-xs text-gray-500 mt-0.5">{item.submitted_date ? new Date(item.submitted_date).toLocaleString() : 'No date'}</p>
-                              </div>
-                              <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${getStatusBadge(item.status)}`}>
-                                {item.status}
-                              </span>
-                            </div>
+                      <div className="max-h-[68vh] overflow-auto rounded-lg border border-gray-200 bg-white">
+                        <table className="min-w-full text-xs md:text-sm">
+                          <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
+                            <tr>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Applicant</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Employee Code</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Department</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Status</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Submitted</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Details</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {closedIdentityQueueItems.map((item) => (
+                              <Fragment key={item.id}>
+                                <tr className="hover:bg-gray-50 align-top">
+                                  <td className="px-3 py-2 font-medium text-gray-900">{item.applicant_name || 'Applicant'}</td>
+                                  <td className="px-3 py-2 text-gray-700">{item.employee_code || '-'}</td>
+                                  <td className="px-3 py-2 text-gray-700">{item.department_section || '-'}</td>
+                                  <td className="px-3 py-2"><span className={`text-xs font-semibold px-2 py-1 rounded-full ${getStatusBadge(item.status)}`}>{item.status}</span></td>
+                                  <td className="px-3 py-2 text-gray-600">{item.submitted_date ? new Date(item.submitted_date).toLocaleString() : 'No date'}</td>
+                                  <td className="px-3 py-2"><button type="button" onClick={() => setExpandedIdentityDetails((prev) => ({ ...prev, [item.id]: !prev[item.id] }))} className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-100">{expandedIdentityDetails[item.id] ? 'Hide Form' : 'View Full Form'}</button></td>
+                                </tr>
 
-                            <button
-                              type="button"
-                              onClick={() => setExpandedIdentityDetails((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
-                              className="mt-3 inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-100 transition"
-                            >
-                              {expandedIdentityDetails[item.id] ? 'Hide full details' : 'Show full details'}
-                              <svg
-                                className={`h-4 w-4 transition-transform ${expandedIdentityDetails[item.id] ? 'rotate-180' : ''}`}
-                                viewBox="0 0 20 20"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                              >
-                                <path d="M5 7.5L10 12.5L15 7.5" strokeLinecap="round" strokeLinejoin="round" />
-                              </svg>
-                            </button>
-
-                            {expandedIdentityDetails[item.id] && renderIdentityDetails(item)}
-
-                            <div className="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
-                              <p className="text-xs text-gray-500">Workflow Stage</p>
-                              <p className="font-medium text-gray-900">{item.stage_message || 'Completed'}</p>
-                            </div>
-
-                            {(item.approval_remark || item.approval_processed_by_name) && (
-                              <div className="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
-                                <p className="text-xs text-gray-500">Latest Decision</p>
-                                <p className="font-medium text-gray-900">{item.approval_remark || '-'}</p>
-                                <p className="text-xs text-gray-500 mt-1">
-                                  By: {item.approval_processed_by_name || '-'} {item.approval_processed_at ? `on ${new Date(item.approval_processed_at).toLocaleString()}` : ''}
-                                </p>
-                              </div>
-                            )}
-                          </div>
-                        ))}
+                                {expandedIdentityDetails[item.id] && (
+                                  <tr className="bg-gray-50">
+                                    <td colSpan={6} className="px-3 py-3">
+                                      {renderIdentityDetails(item)}
+                                      <div className="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
+                                        <p className="text-xs text-gray-500">Workflow Stage</p>
+                                        <p className="font-medium text-gray-900">{item.stage_message || 'Completed'}</p>
+                                      </div>
+                                      {(item.approval_remark || item.approval_processed_by_name) && (
+                                        <div className="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
+                                          <p className="text-xs text-gray-500">Latest Decision</p>
+                                          <p className="font-medium text-gray-900">{item.approval_remark || '-'}</p>
+                                          <p className="text-xs text-gray-500 mt-1">By: {item.approval_processed_by_name || '-'} {item.approval_processed_at ? `on ${new Date(item.approval_processed_at).toLocaleString()}` : ''}</p>
+                                        </div>
+                                      )}
+                                    </td>
+                                  </tr>
+                                )}
+                              </Fragment>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     )}
                   </div>
@@ -2246,8 +2236,8 @@ export default function DashboardPage() {
                             </thead>
                             <tbody className="divide-y divide-gray-100">
                               {pendingVehicleQueueItems.map((item) => (
-                                <>
-                                  <tr key={item.id} className="hover:bg-gray-50 align-top">
+                                <Fragment key={item.id}>
+                                  <tr className="hover:bg-gray-50 align-top">
                                     <td className="px-3 py-2"><input type="checkbox" checked={Boolean(selectedVehicleItems[item.id])} disabled={item.can_take_action === false} onChange={(e) => setSelectedVehicleItems((prev) => ({ ...prev, [item.id]: e.target.checked }))} className="h-4 w-4 accent-emerald-600" /></td>
                                     <td className="px-3 py-2 font-medium text-gray-900">{item.applicant_name || 'Applicant'}</td>
                                     <td className="px-3 py-2 text-gray-700">{item.applicant_identifier || '-'}</td>
@@ -2289,7 +2279,7 @@ export default function DashboardPage() {
                                       </td>
                                     </tr>
                                   )}
-                                </>
+                                </Fragment>
                               ))}
                             </tbody>
                           </table>
@@ -2304,63 +2294,49 @@ export default function DashboardPage() {
                     {closedVehicleQueueItems.length === 0 && <p className="text-sm text-gray-500">No closed requests yet.</p>}
 
                     {closedVehicleQueueItems.length > 0 && (
-                      <div className="space-y-3 max-h-[68vh] overflow-y-auto pr-1">
-                        {closedVehicleQueueItems.map((item) => (
-                          <div key={item.id} className={`rounded-xl section-glass border p-4 ${
-                            ['REJECTED','CANCELLED'].includes((item.status||'').toUpperCase())
-                              ? 'border-red-200 bg-red-50'
-                              : 'border-gray-200 bg-gray-50'
-                          }`}>
-                            <div className="flex justify-between items-center gap-3">
-                              <div>
-                                <p className="text-gray-900 font-medium text-sm">{item.applicant_name || 'Applicant'}</p>
-                                <p className="text-xs text-gray-700 mt-0.5">Applicant Identifier: {item.applicant_identifier || '-'}</p>
-                                <p className="text-xs text-gray-500 mt-0.5">{item.submitted_date ? new Date(item.submitted_date).toLocaleString() : 'No date'}</p>
-                              </div>
-                              <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${getStatusBadge(item.status)}`}>
-                                {item.status}
-                              </span>
-                            </div>
+                      <div className="max-h-[68vh] overflow-auto rounded-lg border border-gray-200 bg-white">
+                        <table className="min-w-full text-xs md:text-sm">
+                          <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
+                            <tr>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Applicant</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Identifier</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Department</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Status</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Submitted</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Details</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {closedVehicleQueueItems.map((item) => (
+                              <Fragment key={item.id}>
+                                <tr className="hover:bg-gray-50 align-top">
+                                  <td className="px-3 py-2 font-medium text-gray-900">{item.applicant_name || 'Applicant'}</td>
+                                  <td className="px-3 py-2 text-gray-700">{item.applicant_identifier || '-'}</td>
+                                  <td className="px-3 py-2 text-gray-700">{item.department_section || '-'}</td>
+                                  <td className="px-3 py-2"><span className={`text-xs font-semibold px-2 py-1 rounded-full ${getStatusBadge(item.status)}`}>{item.status}</span></td>
+                                  <td className="px-3 py-2 text-gray-600">{item.submitted_date ? new Date(item.submitted_date).toLocaleString() : 'No date'}</td>
+                                  <td className="px-3 py-2"><button type="button" onClick={() => setExpandedVehicleDetails((prev) => ({ ...prev, [item.id]: !prev[item.id] }))} className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-100">{expandedVehicleDetails[item.id] ? 'Hide Form' : 'View Full Form'}</button></td>
+                                </tr>
 
-                            <button
-                              type="button"
-                              onClick={() => setExpandedVehicleDetails((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
-                              className="mt-3 inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-100 transition"
-                            >
-                              {expandedVehicleDetails[item.id] ? 'Hide full details' : 'Show full details'}
-                              <svg
-                                className={`h-4 w-4 transition-transform ${expandedVehicleDetails[item.id] ? 'rotate-180' : ''}`}
-                                viewBox="0 0 20 20"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                              >
-                                <path d="M5 7.5L10 12.5L15 7.5" strokeLinecap="round" strokeLinejoin="round" />
-                              </svg>
-                            </button>
-
-                            {expandedVehicleDetails[item.id] && (
-                              <>
-                                {renderVehicleDetails(item)}
-
-                                <div className="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
-                                  <p className="text-xs text-gray-500">Workflow Stage</p>
-                                  <p className="font-medium text-gray-900">{item.stage_message || 'Completed'}</p>
-                                </div>
-
-                                {(item.approval_remark || item.approval_processed_by_name) && (
-                                  <div className="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
-                                    <p className="text-xs text-gray-500">Latest Decision</p>
-                                    <p className="font-medium text-gray-900">{item.approval_remark || '-'}</p>
-                                    <p className="text-xs text-gray-500 mt-1">
-                                      By: {item.approval_processed_by_name || '-'} {item.approval_processed_at ? `on ${new Date(item.approval_processed_at).toLocaleString()}` : ''}
-                                    </p>
-                                  </div>
+                                {expandedVehicleDetails[item.id] && (
+                                  <tr className="bg-gray-50">
+                                    <td colSpan={6} className="px-3 py-3">
+                                      {renderVehicleDetails(item)}
+                                      <div className="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"><p className="text-xs text-gray-500">Workflow Stage</p><p className="font-medium text-gray-900">{item.stage_message || 'Completed'}</p></div>
+                                      {(item.approval_remark || item.approval_processed_by_name) && (
+                                        <div className="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
+                                          <p className="text-xs text-gray-500">Latest Decision</p>
+                                          <p className="font-medium text-gray-900">{item.approval_remark || '-'}</p>
+                                          <p className="text-xs text-gray-500 mt-1">By: {item.approval_processed_by_name || '-'} {item.approval_processed_at ? `on ${new Date(item.approval_processed_at).toLocaleString()}` : ''}</p>
+                                        </div>
+                                      )}
+                                    </td>
+                                  </tr>
                                 )}
-                              </>
-                            )}
-                          </div>
-                        ))}
+                              </Fragment>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     )}
                   </div>
@@ -2466,8 +2442,8 @@ export default function DashboardPage() {
                             </thead>
                             <tbody className="divide-y divide-gray-100">
                               {pendingUndertakingQueueItems.map((item) => (
-                                <>
-                                  <tr key={item.id} className="hover:bg-gray-50 align-top">
+                                <Fragment key={item.id}>
+                                  <tr className="hover:bg-gray-50 align-top">
                                     <td className="px-3 py-2"><input type="checkbox" checked={Boolean(selectedUndertakingItems[item.id])} onChange={(e) => setSelectedUndertakingItems((prev) => ({ ...prev, [item.id]: e.target.checked }))} className="h-4 w-4 accent-emerald-600" /></td>
                                     <td className="px-3 py-2 font-medium text-gray-900">{item.student_name || 'Student'}</td>
                                     <td className="px-3 py-2 text-gray-700">{item.entry_number || '-'}</td>
@@ -2492,7 +2468,7 @@ export default function DashboardPage() {
                                       </td>
                                     </tr>
                                   )}
-                                </>
+                                </Fragment>
                               ))}
                             </tbody>
                           </table>
@@ -2507,52 +2483,42 @@ export default function DashboardPage() {
                     {closedUndertakingQueueItems.length === 0 && <p className="text-sm text-gray-500">No closed requests yet.</p>}
 
                     {closedUndertakingQueueItems.length > 0 && (
-                      <div className="space-y-3 max-h-[68vh] overflow-y-auto pr-1">
-                        {closedUndertakingQueueItems.map((item) => (
-                          <div key={item.id} className={`rounded-xl section-glass border p-4 ${
-                            ['REJECTED','CANCELLED'].includes((item.status||'').toUpperCase())
-                              ? 'border-red-200 bg-red-50'
-                              : 'border-gray-200 bg-gray-50'
-                          }`}>
-                            <div className="flex justify-between items-center gap-3">
-                              <div>
-                                <p className="text-gray-900 font-medium text-sm">{item.student_name || 'Student'}</p>
-                                <p className="text-xs text-gray-700 mt-0.5">Entry Number: {item.entry_number || '-'}</p>
-                                <p className="text-xs text-gray-500 mt-0.5">{item.submitted_date ? new Date(item.submitted_date).toLocaleString() : 'No date'}</p>
-                              </div>
-                              <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${getStatusBadge(item.status)}`}>
-                                {item.status}
-                              </span>
-                            </div>
+                      <div className="max-h-[68vh] overflow-auto rounded-lg border border-gray-200 bg-white">
+                        <table className="min-w-full text-xs md:text-sm">
+                          <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
+                            <tr>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Applicant</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Entry Number</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Hostel</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Status</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Submitted</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-600">Details</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {closedUndertakingQueueItems.map((item) => (
+                              <Fragment key={item.id}>
+                                <tr className="hover:bg-gray-50 align-top">
+                                  <td className="px-3 py-2 font-medium text-gray-900">{item.student_name || 'Student'}</td>
+                                  <td className="px-3 py-2 text-gray-700">{item.entry_number || '-'}</td>
+                                  <td className="px-3 py-2 text-gray-700">{item.hostel_name || '-'}</td>
+                                  <td className="px-3 py-2"><span className={`text-xs font-semibold px-2 py-1 rounded-full ${getStatusBadge(item.status)}`}>{item.status}</span></td>
+                                  <td className="px-3 py-2 text-gray-600">{item.submitted_date ? new Date(item.submitted_date).toLocaleString() : 'No date'}</td>
+                                  <td className="px-3 py-2"><button type="button" onClick={() => setExpandedUndertakingDetails((prev) => ({ ...prev, [item.id]: !prev[item.id] }))} className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-100">{expandedUndertakingDetails[item.id] ? 'Hide Form' : 'View Full Form'}</button></td>
+                                </tr>
 
-                            <button
-                              type="button"
-                              onClick={() => setExpandedUndertakingDetails((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
-                              className="mt-3 inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-100 transition"
-                            >
-                              {expandedUndertakingDetails[item.id] ? 'Hide full details' : 'Show full details'}
-                              <svg
-                                className={`h-4 w-4 transition-transform ${expandedUndertakingDetails[item.id] ? 'rotate-180' : ''}`}
-                                viewBox="0 0 20 20"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                              >
-                                <path d="M5 7.5L10 12.5L15 7.5" strokeLinecap="round" strokeLinejoin="round" />
-                              </svg>
-                            </button>
-
-                            {expandedUndertakingDetails[item.id] && (
-                              <>
-                                {renderUndertakingDetails(item)}
-                                <div className="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
-                                  <p className="text-xs text-gray-500">Remark</p>
-                                  <p className="font-medium text-gray-900">{item.reviewer_remarks || '-'}</p>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        ))}
+                                {expandedUndertakingDetails[item.id] && (
+                                  <tr className="bg-gray-50">
+                                    <td colSpan={6} className="px-3 py-3">
+                                      {renderUndertakingDetails(item)}
+                                      <div className="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"><p className="text-xs text-gray-500">Remark</p><p className="font-medium text-gray-900">{item.reviewer_remarks || '-'}</p></div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </Fragment>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     )}
                   </div>

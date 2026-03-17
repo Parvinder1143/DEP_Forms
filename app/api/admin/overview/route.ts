@@ -27,10 +27,6 @@ function isStakeholderRole(role?: string): boolean {
   )
 }
 
-function isEstablishmentRole(role?: string): boolean {
-  return normalizeRoleName(role).includes('establish')
-}
-
 function isIdentityQueueRole(role?: string): boolean {
   const normalized = normalizeRoleName(role)
   if (!normalized) return false
@@ -66,8 +62,8 @@ function resolveApprovalLevel(roleNames: string[]): ApprovalLevel | null {
 
 function expectedStatusesForLevel(level: ApprovalLevel): string[] {
   if (level === 1) return ['SUBMITTED', 'PENDING_APPROVAL', 'PENDING_LEVEL_1']
-  if (level === 2) return ['PENDING_LEVEL_2']
-  return ['PENDING_LEVEL_3']
+  if (level === 2) return ['PENDING_LEVEL_2', 'PENDING_OFFICER', 'APPROVED_BY_OFFICER']
+  return ['PENDING_LEVEL_3', 'PENDING_AUTHORITY', 'IN_PROGRESS']
 }
 
 function expectedIdentityStatusesForLevel(level: ApprovalLevel): string[] {
@@ -184,7 +180,6 @@ export async function GET(request: NextRequest) {
     const isInstituteAdmin = roleNames.some((role) => isInstituteAdminRole(role)) || isInstituteAdminEmail(auth.user.email)
     const isSuperAdmin = roleNames.some((role) => isSuperAdminRole(role))
     const isWorkflowStakeholder = roleNames.some((role) => isStakeholderRole(role))
-    const isEstablishmentStakeholder = roleNames.some((role) => isEstablishmentRole(role))
     const canViewIdentityQueue = roleNames.some((role) => isIdentityQueueRole(role)) && !admin && !isInstituteAdmin
     const canViewVehicleQueue = roleNames.some((role) => isVehicleQueueRole(role)) && !admin && !isInstituteAdmin
     const identityApprovalLevel = resolveApprovalLevel(roleNames)
@@ -192,7 +187,7 @@ export async function GET(request: NextRequest) {
     const canApproveIdentityRequests = canViewIdentityQueue && Boolean(identityApprovalLevel)
     const canApproveVehicleRequests = canViewVehicleQueue && Boolean(vehicleApprovalLevel)
     const emailApprovalLevel = resolveApprovalLevel(roleNames)
-    const canApproveEmailRequests = isEstablishmentStakeholder && !admin && !isInstituteAdmin
+    const canApproveEmailRequests = Boolean(emailApprovalLevel) && !admin && !isInstituteAdmin
     const canManageUndertakingRequests = isInstituteAdmin && !admin
     const canViewUndertakingDetails = isInstituteAdmin && !admin
     const canViewUndertakingQueue = admin || isInstituteAdmin
@@ -308,8 +303,8 @@ export async function GET(request: NextRequest) {
 
     const pendingStatuses = new Set(['SUBMITTED', 'PENDING_APPROVAL', 'PENDING_LEVEL_1', 'PENDING_LEVEL_2', 'PENDING_LEVEL_3', 'PENDING_OFFICER', 'APPROVED_BY_OFFICER', 'PENDING_AUTHORITY', 'IN_PROGRESS'])
     const completedStatuses = new Set(['COMPLETED', 'REJECTED', 'APPROVED', 'CLOSED', 'ISSUED'])
-    const stakeholderAllowedStatuses = canApproveEmailRequests && emailApprovalLevel
-      ? new Set([...expectedStatusesForLevel(emailApprovalLevel), 'COMPLETED', 'REJECTED'])
+    const stakeholderAllowedStatuses = canApproveEmailRequests
+      ? new Set([...pendingStatuses, ...completedStatuses])
       : null
 
     const scopedEmailQueue = (emailQueueData || []).filter((item: any) => {

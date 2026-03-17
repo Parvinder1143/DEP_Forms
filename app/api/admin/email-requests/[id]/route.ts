@@ -43,9 +43,9 @@ function expectedStatusesForLevel(level: ApprovalLevel): string[] {
     return ['SUBMITTED', 'PENDING_APPROVAL', 'PENDING_LEVEL_1']
   }
   if (level === 2) {
-    return ['PENDING_LEVEL_2']
+    return ['PENDING_LEVEL_2', 'PENDING_OFFICER', 'APPROVED_BY_OFFICER']
   }
-  return ['PENDING_LEVEL_3']
+  return ['PENDING_LEVEL_3', 'PENDING_AUTHORITY', 'IN_PROGRESS']
 }
 
 function stageCodeForLevel(level: ApprovalLevel): 'LEVEL_1' | 'LEVEL_2' | 'LEVEL_3' {
