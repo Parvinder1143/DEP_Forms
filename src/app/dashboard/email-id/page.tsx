@@ -1,168 +1,200 @@
-import { requireRole } from "@/lib/auth";
+import { redirect } from "next/navigation";
+import { getRoleDisplayContext, requireUser } from "@/lib/auth";
 import {
   listEmailIdForms,
   type EmailFormWithApprovals,
-  type EmailIdFormStatus,
 } from "@/lib/email-id-store";
+import { getWorkflow, getStagesForRole } from "@/lib/workflow-engine";
+import { getActiveDelegationForUser } from "@/lib/delegation-store";
+import {
+  getCurrentEmailWorkflowStage,
+  getStageDefinitionByNumber,
+  roleCanApproveStage,
+  stageRequiresIssuanceFields,
+} from "@/lib/email-id-workflow";
+import { listRoleStageApprovalsForSubmissions } from "@/lib/workflow-stage-approvals";
+import { getWorkflowStageMode } from "@/lib/workflow-engine";
 import {
   getEmailFormStatusBadgeClass,
   getEmailFormStatusText,
 } from "@/lib/email-id-status";
-import Link from "next/link";
+import { StakeholderDashboardScaffold } from "@/components/stakeholder/dashboard-scaffold";
+import { QueueToggleClient } from "@/components/stakeholder/queue-toggle-client";
+import { BulkReviewGrid } from "@/components/stakeholder/bulk-review-grid";
+import { bulkIssueEmailIds, bulkReviewEmailIdForms } from "@/app/actions/email-id";
 
-export default async function EmailIdDashboard({
-  searchParams,
-}: {
-  searchParams: Promise<{ status?: string; queue?: string }>;
-}) {
-  const user = await requireRole(["IT_ADMIN", "SYSTEM_ADMIN"]);
-  const { status, queue } = await searchParams;
-  const isQueueOpen = queue === "open";
-  const normalizedStatus =
-    status && ["PENDING", "FORWARDED", "ISSUED"].includes(status)
-      ? (status as EmailIdFormStatus)
-      : undefined;
+export default async function GenericEmailIdDashboard() {
+  const user = await requireUser();
+  const delegation = await getActiveDelegationForUser(user.id);
+  const activeRole = delegation?.delegatedRole ?? user.role;
 
-  const forms = (await listEmailIdForms({
-    viewerRole: user.role,
-    status: normalizedStatus,
+  if (!activeRole) {
+    redirect("/pending-role");
+  }
+
+  const roleDisplay = getRoleDisplayContext({
+    role: activeRole,
+    baseRole: user.role,
+    isTemporarilyAssigned: Boolean(delegation && activeRole !== user.role),
+  });
+
+  const workflow = await getWorkflow("email-id");
+  if (!workflow) {
+    throw new Error("Email ID workflow blueprint not found in database.");
+  }
+  const emailWorkflow = workflow;
+
+  const validStages = getStagesForRole(emailWorkflow, activeRole);
+  const isSystemAdmin = activeRole === "SYSTEM_ADMIN";
+
+  if (validStages.length === 0 && !isSystemAdmin) {
+    redirect("/");
+  }
+
+  const inProgressForms = (await listEmailIdForms({
     includeApprovals: true,
   })) as EmailFormWithApprovals[];
-  const currentStageForms = (await listEmailIdForms({
-    status: "FORWARDED",
-    includeApprovals: true,
-  })) as EmailFormWithApprovals[];
-  const currentStagePendingCount = currentStageForms.length;
 
-  const tabs = ["ALL", "PENDING", "FORWARDED", "ISSUED"];
+  const roleStageApprovals = await listRoleStageApprovalsForSubmissions(
+    activeRole,
+    inProgressForms.map((form) => form.id)
+  );
+
+  const actionablePending: EmailFormWithApprovals[] = [];
+  const inReview: EmailFormWithApprovals[] = [];
+
+  for (const form of inProgressForms) {
+    if (form.status === "ISSUED" || form.status === "REJECTED") {
+      continue;
+    }
+
+    const currentStageNumber = getCurrentEmailWorkflowStage(form, emailWorkflow);
+    if (currentStageNumber === null) {
+      continue;
+    }
+
+    const stageDefinition = getStageDefinitionByNumber(emailWorkflow, currentStageNumber);
+    if (!stageDefinition) {
+      continue;
+    }
+
+    const canActOnStage = isSystemAdmin || roleCanApproveStage(stageDefinition, user.role ?? null);
+    if (canActOnStage) {
+      const stageMode = getWorkflowStageMode(stageDefinition);
+      const alreadyApprovedThisStage = Boolean(
+        roleStageApprovals.get(form.id)?.has(currentStageNumber)
+      );
+
+      if (stageMode === "AND" && alreadyApprovedThisStage) {
+        inReview.push(form);
+      } else {
+        actionablePending.push(form);
+      }
+    } else {
+      inReview.push(form);
+    }
+  }
+
+  const pendingForms = actionablePending;
+  const ongoingForms = inReview;
+
+  const [issuedForms, rejectedForms] = (await Promise.all([
+    listEmailIdForms({ status: "ISSUED", includeApprovals: true }),
+    listEmailIdForms({ status: "REJECTED", includeApprovals: true }),
+  ])) as [EmailFormWithApprovals[], EmailFormWithApprovals[]];
+
+  const completedForms = [...issuedForms, ...rejectedForms].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+
+  async function handleBulkAction(input: {
+    ids: string[];
+    decision: "approve" | "reject";
+    approverName: string;
+    remark: string;
+    dateOfCreation?: string;
+    tentativeRemovalDate?: string | null;
+  }) {
+    "use server";
+    
+    const selectedForms = pendingForms.filter((form) => input.ids.includes(form.id));
+    const issuanceIds = selectedForms
+      .filter((form) => {
+        const stageNumber = getCurrentEmailWorkflowStage(form, emailWorkflow);
+        return stageNumber !== null && stageRequiresIssuanceFields(emailWorkflow, stageNumber);
+      })
+      .map((form) => form.id);
+
+    const reviewIds = selectedForms
+      .filter((form) => !issuanceIds.includes(form.id))
+      .map((form) => form.id);
+
+    if (issuanceIds.length > 0) {
+      if (input.decision === "reject") {
+        throw new Error("Final-stage issuance requests cannot be rejected in bulk.");
+      }
+      await bulkIssueEmailIds({
+        formIds: issuanceIds,
+        approverName: input.approverName,
+        dateOfCreation: input.dateOfCreation ?? new Date().toISOString().split("T")[0],
+        tentativeRemovalDate: input.tentativeRemovalDate ?? null,
+      });
+    }
+
+    if (reviewIds.length > 0) {
+      let sectionTarget: "ACADEMICS" | "ESTABLISHMENT" | "RESEARCH_AND_DEVELOPMENT" = "ESTABLISHMENT";
+      if (activeRole === "FORWARDING_AUTHORITY_ACADEMICS") sectionTarget = "ACADEMICS";
+      if (activeRole === "FORWARDING_AUTHORITY_R_AND_D") sectionTarget = "RESEARCH_AND_DEVELOPMENT";
+
+      await bulkReviewEmailIdForms({
+        formIds: reviewIds,
+        section: sectionTarget,
+        approverName: input.approverName,
+        remark: input.remark,
+        decision: input.decision,
+      });
+    }
+  }
+
+  const mapFormToRow = (f: EmailFormWithApprovals) => ({
+    id: f.id,
+    cell1: `${f.initials} ${f.firstName} ${f.lastName}`,
+    cell2: f.role,
+    cell3: f.department,
+    submittedAt: new Date(f.createdAt).toLocaleDateString("en-IN"),
+    statusText: getEmailFormStatusText({ status: f.status, approvals: f.approvals }),
+    statusClassName: getEmailFormStatusBadgeClass(f.status),
+    viewHref: `/dashboard/email-id/${f.id}`,
+  });
+
+  const pendingRows = pendingForms.map(mapFormToRow);
+  const ongoingRows = ongoingForms.map(mapFormToRow);
+  const completedRows = completedForms.map(mapFormToRow);
 
   return (
-    <div className="min-h-screen bg-slate-50 py-10 px-4">
-      <div className="mx-auto max-w-5xl">
-        {/* Header */}
-        <div className="mb-8 flex items-center justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-widest text-indigo-600">
-              Dashboard
-            </p>
-            <h1 className="mt-1 text-2xl font-bold text-slate-900">
-              Email ID Requests
-            </h1>
-          </div>
-          <Link
-            href="/forms/email-id"
-            className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 transition"
-          >
-            + New Request
-          </Link>
-        </div>
-
-        {/* Tabs */}
-        <div className="mb-6 flex gap-2 overflow-x-auto">
-          {tabs.map((tab) => (
-            <Link
-              key={tab}
-              href={`/dashboard/email-id?status=${tab}`}
-              className={`rounded-lg px-4 py-1.5 text-sm font-medium transition ${
-                (status ?? "ALL") === tab
-                  ? "bg-indigo-600 text-white"
-                  : "bg-white border border-slate-200 text-slate-600 hover:border-indigo-300"
-              }`}
-            >
-              {tab === "ALL"
-                ? "All"
-                : tab === "ISSUED"
-                  ? "Completed"
-                  : "Pending"}
-            </Link>
-          ))}
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-7 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h2 className="text-3xl font-bold tracking-tight text-slate-900">Email Approval Queue Access</h2>
-              <p className="mt-2 text-lg text-amber-700">Open queue to review Email ID requests.</p>
-            </div>
-            <div className="relative">
-              <Link
-                href={
-                  isQueueOpen
-                    ? `/dashboard/email-id?status=${status ?? "ALL"}`
-                    : `/dashboard/email-id?status=${status ?? "ALL"}&queue=open`
-                }
-                className="rounded-2xl bg-black px-8 py-4 text-base font-semibold text-white transition hover:bg-slate-800"
-              >
-                {isQueueOpen ? "Hide Email Approval Queue" : "Open Email Approval Queue"}
-              </Link>
-              {currentStagePendingCount > 0 ? (
-                <span className="absolute -right-2 -top-2 inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-red-600 px-2 text-xs font-bold text-white">
-                  {currentStagePendingCount}
-                </span>
-              ) : null}
-            </div>
-          </div>
-        </div>
-
-        {isQueueOpen && (
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            {forms.length === 0 ? (
-              <div className="py-16 text-center text-slate-400 text-sm">
-                No requests found.
-              </div>
-            ) : (
-              <table className="w-full text-sm">
-                <thead className="border-b border-slate-100 bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  <tr>
-                    <th className="px-5 py-3 text-left">Applicant</th>
-                    <th className="px-5 py-3 text-left">Role</th>
-                    <th className="px-5 py-3 text-left">Department</th>
-                    <th className="px-5 py-3 text-left">Submitted</th>
-                    <th className="px-5 py-3 text-left">Status</th>
-                    <th className="px-5 py-3 text-left"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50">
-                  {forms.map((f) => (
-                    <tr
-                      key={f.id}
-                      className="hover:bg-slate-50 transition-colors"
-                    >
-                      <td className="px-5 py-4 font-medium text-slate-900">
-                        {f.initials} {f.firstName} {f.lastName}
-                      </td>
-                      <td className="px-5 py-4 text-slate-600">{f.role}</td>
-                      <td className="px-5 py-4 text-slate-600">
-                        {f.department}
-                      </td>
-                      <td className="px-5 py-4 text-slate-500">
-                        {new Date(f.createdAt).toLocaleDateString("en-IN")}
-                      </td>
-                      <td className="px-5 py-4">
-                        <span className={`inline-block rounded-full px-3 py-0.5 text-xs font-semibold ${getEmailFormStatusBadgeClass(f.status)}`}>
-                          {getEmailFormStatusText({ status: f.status, approvals: f.approvals })}
-                        </span>
-                      </td>
-                      <td className="px-5 py-4">
-                        <Link
-                          href={`/dashboard/email-id/${f.id}`}
-                          className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-indigo-400 hover:text-indigo-700 transition"
-                        >
-                          Review →
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        )}
-
-        <p className="mt-4 text-center text-xs text-slate-400">
-          {forms.length} request{forms.length !== 1 ? "s" : ""} shown
-        </p>
-      </div>
-    </div>
+    <StakeholderDashboardScaffold
+      roleLabel={roleDisplay.activeRoleLabel}
+      baseRoleLabel={roleDisplay.baseRoleLabel}
+      isTemporarilyAssigned={roleDisplay.isTemporarilyAssigned}
+      activeRole={activeRole}
+    >
+      <QueueToggleClient
+        title="Email Approval Queue"
+        description="Process pending recommendations configured via Workflow Engine."
+        pendingCount={pendingRows.length}
+        defaultOpen={true}
+      >
+        <BulkReviewGrid
+          pendingRows={pendingRows}
+          ongoingRows={ongoingRows}
+          completedRows={completedRows}
+          cell1Header="Applicant"
+          cell2Header="Role"
+          cell3Header="Department"
+          showBulkIssuanceFields={true}
+          onBulkReview={handleBulkAction}
+        />
+      </QueueToggleClient>
+    </StakeholderDashboardScaffold>
   );
 }

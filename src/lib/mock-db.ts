@@ -3,7 +3,7 @@ export type ForwardingSection =
   | "ESTABLISHMENT"
   | "RESEARCH_AND_DEVELOPMENT";
 
-export type AppRole =
+export type BuiltInAppRole =
   | "STUDENT"
   | "INTERN"
   | "EMPLOYEE"
@@ -26,6 +26,8 @@ export type AppRole =
   | "IT_ADMIN"
   | "SYSTEM_ADMIN";
 
+export type AppRole = BuiltInAppRole | (string & {});
+
 export type AuthMode = "login" | "signup";
 
 export type EmailIdFormStatus = "PENDING" | "FORWARDED" | "ISSUED" | "REJECTED";
@@ -37,6 +39,7 @@ export type UserRecord = {
   email: string;
   password: string;
   fullName: string | null;
+  department?: string | null;
   role: AppRole | null;
 };
 
@@ -150,7 +153,7 @@ function ensureSeedData(store: AppStore) {
     },
     {
       email: "academics@iitrpr.ac.in",
-      fullName: "Forwarding Authority (Academics)",
+      fullName: "Academics",
       role: "FORWARDING_AUTHORITY_ACADEMICS",
       password: "123456",
     },
@@ -162,7 +165,7 @@ function ensureSeedData(store: AppStore) {
     },
     {
       email: "rnd@iitrpr.ac.in",
-      fullName: "Forwarding Authority (R&D)",
+      fullName: "R&D",
       role: "FORWARDING_AUTHORITY_R_AND_D",
       password: "123456",
     },
@@ -204,7 +207,7 @@ function ensureSeedData(store: AppStore) {
     },
     {
       email: "dean@iitrpr.ac.in",
-      fullName: "Dean FA&A",
+      fullName: "Dean",
       role: "DEAN_FAA",
       password: "123456",
     },
@@ -278,6 +281,7 @@ export function authenticateUser(input: {
   password: string;
   fullName?: string | null;
   forceSystemAdmin?: boolean;
+  signupAsStudent?: boolean;
 }) {
   const store = getStore();
   const normalizedEmail = normalizeEmail(input.email);
@@ -311,6 +315,8 @@ export function authenticateUser(input: {
   }
 
   const defaultRole: AppRole | null = input.forceSystemAdmin ? "SYSTEM_ADMIN" : null;
+  const departmentTag =
+    input.signupAsStudent && !input.forceSystemAdmin ? "__STUDENT_ROLE_REQUEST__" : null;
 
   const user: UserRecord = {
     id: newId("usr"),
@@ -319,6 +325,7 @@ export function authenticateUser(input: {
     email: normalizedEmail,
     password: input.password,
     fullName: input.fullName?.trim() || null,
+    department: departmentTag,
     role: defaultRole,
   };
   store.users.push(user);
@@ -344,8 +351,35 @@ export function updateUserRole(userId: string, role: AppRole) {
     throw new Error("User not found.");
   }
   user.role = role;
+  if (user.department === "__STUDENT_ROLE_REQUEST__") {
+    user.department = null;
+  }
   user.updatedAt = now();
   return user;
+}
+
+export function approvePendingStudentRoleRequests() {
+  const store = getStore();
+  let updated = 0;
+
+  for (const user of store.users) {
+    if (user.role) {
+      continue;
+    }
+    if (!user.email.endsWith("@iitrpr.ac.in")) {
+      continue;
+    }
+    if (user.department !== "__STUDENT_ROLE_REQUEST__") {
+      continue;
+    }
+
+    user.role = "STUDENT";
+    user.department = null;
+    user.updatedAt = now();
+    updated += 1;
+  }
+
+  return updated;
 }
 
 export function createEmailIdForm(input: Omit<EmailIdFormRecord, "id" | "createdAt" | "updatedAt" | "status">) {
@@ -437,6 +471,7 @@ export function listEmailIdForms(params?: {
 
 export function addForwardingApproval(input: {
   formId: string;
+  stage: number;
   section: ForwardingSection;
   approverName: string;
 }) {
@@ -445,15 +480,15 @@ export function addForwardingApproval(input: {
   if (!form) {
     throw new Error("Form not found.");
   }
-  if (form.status !== "PENDING") {
-    throw new Error("Form is not in PENDING state.");
+  if (form.status === "REJECTED" || form.status === "ISSUED") {
+    throw new Error("Form is already completed.");
   }
 
   const approval: EmailIdApprovalRecord = {
     id: newId("apr"),
     createdAt: now(),
     formId: input.formId,
-    stage: 1,
+    stage: input.stage,
     forwardingSection: input.section,
     approverName: input.approverName,
     assignedEmailId: null,
@@ -471,6 +506,7 @@ export function addForwardingApproval(input: {
 
 export function addIssueApproval(input: {
   formId: string;
+  stage: number;
   assignedEmailId: string;
   dateOfCreation: string;
   tentativeRemovalDate: string | null;
@@ -481,15 +517,15 @@ export function addIssueApproval(input: {
   if (!form) {
     throw new Error("Form not found.");
   }
-  if (form.status !== "FORWARDED") {
-    throw new Error("Form has not been forwarded yet.");
+  if (form.status === "REJECTED" || form.status === "ISSUED") {
+    throw new Error("Form is already completed.");
   }
 
   const approval: EmailIdApprovalRecord = {
     id: newId("apr"),
     createdAt: now(),
     formId: input.formId,
-    stage: 2,
+    stage: input.stage,
     forwardingSection: null,
     approverName: input.idCreatedBy,
     assignedEmailId: input.assignedEmailId,
@@ -509,6 +545,7 @@ export function addIssueApproval(input: {
 
 export function rejectEmailIdForm(input: {
   formId: string;
+  stage: number;
   section: ForwardingSection;
   approverName: string;
   remark: string;
@@ -518,15 +555,15 @@ export function rejectEmailIdForm(input: {
   if (!form) {
     throw new Error("Form not found.");
   }
-  if (form.status !== "PENDING") {
-    throw new Error("Form is not in PENDING state.");
+  if (form.status === "REJECTED" || form.status === "ISSUED") {
+    throw new Error("Form is already completed.");
   }
 
   const approval: EmailIdApprovalRecord = {
     id: newId("apr"),
     createdAt: now(),
     formId: input.formId,
-    stage: 1,
+    stage: input.stage,
     forwardingSection: input.section,
     approverName: `Rejected by ${input.approverName} | ${input.remark}`,
     assignedEmailId: null,

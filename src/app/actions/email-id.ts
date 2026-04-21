@@ -1,6 +1,7 @@
 "use server";
 
-import { requireRole } from "@/lib/auth";
+import { requireRole, requireUser } from "@/lib/auth";
+import { getActiveDelegationForUser } from "@/lib/delegation-store";
 import {
   addForwardingApproval,
   addIssueApproval,
@@ -9,6 +10,19 @@ import {
   hasIssuedEmailForUser,
   rejectEmailIdForm,
 } from "@/lib/email-id-store";
+import {
+  getCurrentEmailWorkflowStage,
+  getStageDefinitionByNumber,
+  roleCanApproveStage,
+  stageRequiresIssuanceFields,
+} from "@/lib/email-id-workflow";
+import {
+  addRoleApprovalForStage,
+  clearStageRoleApprovals,
+  listApprovedRolesForStage,
+} from "@/lib/workflow-stage-approvals";
+import { getWorkflowStageMode, getWorkflowStageRoleCodes } from "@/lib/workflow-engine";
+import { getWorkflow } from "@/lib/workflow-engine";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -17,6 +31,82 @@ export type ForwardingSection =
   | "ACADEMICS"
   | "ESTABLISHMENT"
   | "RESEARCH_AND_DEVELOPMENT";
+
+async function getEmailWorkflowOrThrow() {
+  const workflow = await getWorkflow("email-id");
+  if (!workflow) {
+    throw new Error("Email workflow is not configured.");
+  }
+  return workflow;
+}
+
+async function resolveActionableStageForUser(formId: string) {
+  const user = await requireUser();
+  const delegation = await getActiveDelegationForUser(user.id);
+  const activeRole = delegation?.delegatedRole ?? user.role;
+
+  if (!activeRole) {
+    throw new Error("You do not have an assigned stakeholder role.");
+  }
+
+  const form = await getEmailIdFormById(formId);
+  if (!form) {
+    throw new Error("Form not found.");
+  }
+
+  const workflow = await getEmailWorkflowOrThrow();
+  const stageNumber = getCurrentEmailWorkflowStage(form, workflow);
+  if (stageNumber === null) {
+    throw new Error("Form is already completed.");
+  }
+
+  const stage = getStageDefinitionByNumber(workflow, stageNumber);
+  if (!stage) {
+    throw new Error(`Stage ${stageNumber} is not defined in workflow.`);
+  }
+
+  const isSystemAdmin = activeRole === "SYSTEM_ADMIN";
+  if (!isSystemAdmin && !roleCanApproveStage(stage, activeRole)) {
+    throw new Error("You are not authorized for the current stage.");
+  }
+
+  return { user, activeRole, form, workflow, stageNumber, stage, isSystemAdmin };
+}
+
+async function shouldFinalizeEmailStageApproval(input: {
+  formId: string;
+  stageNumber: number;
+  stage: NonNullable<Awaited<ReturnType<typeof resolveActionableStageForUser>>["stage"]>;
+  activeRole: string;
+  isSystemAdmin: boolean;
+  user: { id: string; email: string; fullName?: string | null };
+}) {
+  if (input.isSystemAdmin) {
+    return true;
+  }
+
+  const mode = getWorkflowStageMode(input.stage);
+  const requiredRoles = getWorkflowStageRoleCodes(input.stage).filter((role) => role !== "SYSTEM_ADMIN");
+  if (mode !== "AND" || requiredRoles.length <= 1) {
+    return true;
+  }
+
+  const insertResult = await addRoleApprovalForStage({
+    submissionId: input.formId,
+    stageNumber: input.stageNumber,
+    roleCode: input.activeRole,
+    approverUserId: input.user.id,
+    approverEmail: input.user.email,
+    approverName: input.user.fullName ?? null,
+  });
+
+  if (!insertResult.inserted) {
+    throw new Error("This role has already approved this stage. Waiting for remaining approvals.");
+  }
+
+  const approvedRoles = new Set(await listApprovedRolesForStage(input.formId, input.stageNumber));
+  return requiredRoles.every((roleCode) => approvedRoles.has(roleCode));
+}
 
 function requiredString(formData: FormData, key: string, label: string) {
   const value = String(formData.get(key) ?? "").trim();
@@ -52,6 +142,14 @@ export async function submitEmailIdForm(formData: FormData) {
   const projectName = String(formData.get("projectName") ?? "").trim();
   const reportingOfficerName = String(formData.get("reportingOfficerName") ?? "").trim();
   const reportingOfficerEmail = String(formData.get("reportingOfficerEmail") ?? "").trim();
+  const department = requiredString(formData, "department", "Department / Section");
+  const departmentOther = String(formData.get("departmentOther") ?? "").trim();
+
+  const resolvedDepartment = department === "Other" ? departmentOther : department;
+
+  if (!resolvedDepartment) {
+    throw new Error("Other Department / Section is required when Department / Section is Other.");
+  }
 
   if (isTemp) {
     if (!projectName || !joiningRaw || !endRaw || !reportingOfficerName || !reportingOfficerEmail) {
@@ -75,7 +173,7 @@ export async function submitEmailIdForm(formData: FormData) {
     orgId: requiredString(formData, "orgId", "Organisation / Roll ID"),
     natureOfEngagement,
     role: requiredString(formData, "role", "Role"),
-    department: requiredString(formData, "department", "Department / Section"),
+    department: resolvedDepartment,
     projectName: isTemp ? projectName : null,
     joiningDate: isTemp && joiningRaw ? new Date(joiningRaw) : null,
     anticipatedEndDate: isTemp && endRaw ? new Date(endRaw) : null,
@@ -100,27 +198,32 @@ export async function forwardEmailIdForm(
   section: ForwardingSection,
   approverName: string
 ) {
-  await requireRole([
-    "FORWARDING_AUTHORITY_ACADEMICS",
-    "ESTABLISHMENT",
-    "FORWARDING_AUTHORITY_R_AND_D",
-    "SYSTEM_ADMIN",
-  ]);
+  const { stageNumber, workflow, stage, activeRole, isSystemAdmin, user } =
+    await resolveActionableStageForUser(formId);
 
-  const form = await getEmailIdFormById(formId);
-  if (!form) {
-    throw new Error("Form not found.");
-  }
-  if (form.status !== "PENDING") {
-    throw new Error("Form is not in PENDING state.");
+  if (stageRequiresIssuanceFields(workflow, stageNumber)) {
+    throw new Error("This is the final stage. Use the issue action for completion.");
   }
 
-  await addForwardingApproval({ formId, section, approverName });
+  const finalizeStage = await shouldFinalizeEmailStageApproval({
+    formId,
+    stageNumber,
+    stage,
+    activeRole,
+    isSystemAdmin,
+    user,
+  });
+  if (!finalizeStage) {
+    revalidatePath(`/dashboard/email-id/${formId}`);
+    revalidatePath("/dashboard/email-id");
+    return;
+  }
+
+  await addForwardingApproval({ formId, stage: stageNumber, section, approverName });
+  await clearStageRoleApprovals(formId, stageNumber);
 
   revalidatePath(`/dashboard/email-id/${formId}`);
-  revalidatePath("/dashboard/email-id/academics");
-  revalidatePath("/dashboard/email-id/establishment");
-  revalidatePath("/dashboard/email-id/rnd");
+  revalidatePath("/dashboard/email-id");
   revalidatePath(`/forms/email-id/${formId}`);
 }
 
@@ -133,23 +236,36 @@ export async function issueEmailId(
   tentativeRemovalDate: string | null,
   idCreatedBy: string
 ) {
-  await requireRole(["IT_ADMIN", "SYSTEM_ADMIN"]);
+  const { stageNumber, workflow, stage, activeRole, isSystemAdmin, user } =
+    await resolveActionableStageForUser(formId);
 
-  const form = await getEmailIdFormById(formId);
-  if (!form) {
-    throw new Error("Form not found.");
+  if (!stageRequiresIssuanceFields(workflow, stageNumber)) {
+    throw new Error("This request has not reached the final issuance stage yet.");
   }
-  if (form.status !== "FORWARDED") {
-    throw new Error("Form has not been forwarded yet.");
+
+  const finalizeStage = await shouldFinalizeEmailStageApproval({
+    formId,
+    stageNumber,
+    stage,
+    activeRole,
+    isSystemAdmin,
+    user,
+  });
+  if (!finalizeStage) {
+    revalidatePath(`/dashboard/email-id/${formId}`);
+    revalidatePath("/dashboard/email-id");
+    return;
   }
 
   await addIssueApproval({
     formId,
+    stage: stageNumber,
     assignedEmailId,
     dateOfCreation,
     tentativeRemovalDate,
     idCreatedBy,
   });
+  await clearStageRoleApprovals(formId, stageNumber);
 
   revalidatePath(`/dashboard/email-id/${formId}`);
   revalidatePath(`/forms/email-id/${formId}`);
@@ -161,31 +277,23 @@ export async function rejectEmailIdByForwardingAuthority(
   approverName: string,
   remark: string
 ) {
-  await requireRole([
-    "FORWARDING_AUTHORITY_ACADEMICS",
-    "ESTABLISHMENT",
-    "FORWARDING_AUTHORITY_R_AND_D",
-    "SYSTEM_ADMIN",
-  ]);
-
   if (!remark.trim()) {
     throw new Error("Rejection remark is required.");
   }
 
-  const form = await getEmailIdFormById(formId);
-  if (!form) {
-    throw new Error("Form not found.");
-  }
-  if (form.status !== "PENDING") {
-    throw new Error("Form is not in PENDING state.");
-  }
+  const { stageNumber } = await resolveActionableStageForUser(formId);
 
-  await rejectEmailIdForm({ formId, section, approverName, remark: remark.trim() });
+  await rejectEmailIdForm({
+    formId,
+    stage: stageNumber,
+    section,
+    approverName,
+    remark: remark.trim(),
+  });
+  await clearStageRoleApprovals(formId, stageNumber);
 
   revalidatePath(`/dashboard/email-id/${formId}`);
-  revalidatePath("/dashboard/email-id/academics");
-  revalidatePath("/dashboard/email-id/establishment");
-  revalidatePath("/dashboard/email-id/rnd");
+  revalidatePath("/dashboard/email-id");
   revalidatePath(`/forms/email-id/${formId}`);
 }
 
@@ -196,12 +304,7 @@ export async function bulkReviewEmailIdForms(input: {
   remark: string;
   decision: "approve" | "reject";
 }) {
-  await requireRole([
-    "FORWARDING_AUTHORITY_ACADEMICS",
-    "ESTABLISHMENT",
-    "FORWARDING_AUTHORITY_R_AND_D",
-    "SYSTEM_ADMIN",
-  ]);
+  await requireUser();
 
   const ids = input.formIds.filter(Boolean);
   if (ids.length === 0) {
@@ -215,28 +318,137 @@ export async function bulkReviewEmailIdForms(input: {
   }
 
   for (const formId of ids) {
-    const form = await getEmailIdFormById(formId);
-    if (!form || form.status !== "PENDING") {
+    let stageNumber: number;
+    let workflow;
+    let stage;
+    let activeRole;
+    let isSystemAdmin;
+    let user;
+    try {
+      const resolved = await resolveActionableStageForUser(formId);
+      stageNumber = resolved.stageNumber;
+      workflow = resolved.workflow;
+      stage = resolved.stage;
+      activeRole = resolved.activeRole;
+      isSystemAdmin = resolved.isSystemAdmin;
+      user = resolved.user;
+    } catch {
+      continue;
+    }
+
+    if (stageRequiresIssuanceFields(workflow, stageNumber)) {
       continue;
     }
 
     if (input.decision === "approve") {
+      const finalizeStage = await shouldFinalizeEmailStageApproval({
+        formId,
+        stageNumber,
+        stage,
+        activeRole,
+        isSystemAdmin,
+        user,
+      });
+      if (!finalizeStage) {
+        continue;
+      }
+
       await addForwardingApproval({
         formId,
+        stage: stageNumber,
         section: input.section,
         approverName: `${input.approverName} | ${input.remark.trim()}`,
       });
+      await clearStageRoleApprovals(formId, stageNumber);
     } else {
       await rejectEmailIdForm({
         formId,
+        stage: stageNumber,
         section: input.section,
         approverName: input.approverName,
         remark: input.remark,
       });
+      await clearStageRoleApprovals(formId, stageNumber);
     }
   }
 
-  revalidatePath("/dashboard/email-id/academics");
-  revalidatePath("/dashboard/email-id/establishment");
-  revalidatePath("/dashboard/email-id/rnd");
+  revalidatePath("/dashboard/email-id");
+}
+
+export async function bulkIssueEmailIds(input: {
+  formIds: string[];
+  approverName: string;
+  dateOfCreation?: string;
+  tentativeRemovalDate?: string | null;
+}) {
+  await requireUser();
+
+  const ids = input.formIds.filter(Boolean);
+  if (ids.length === 0) {
+    throw new Error("Please select at least one request.");
+  }
+  if (!input.approverName.trim()) {
+    throw new Error("IT Admin name is required.");
+  }
+
+  const sharedDateOfCreation = input.dateOfCreation?.trim() || new Date().toISOString().split("T")[0];
+  const sharedTentativeRemovalDate = input.tentativeRemovalDate?.trim() || null;
+
+  for (const formId of ids) {
+    const form = await getEmailIdFormById(formId);
+    if (!form) {
+      continue;
+    }
+
+    let stageNumber: number;
+    let workflow;
+    let stage;
+    let activeRole;
+    let isSystemAdmin;
+    let user;
+    try {
+      const resolved = await resolveActionableStageForUser(formId);
+      stageNumber = resolved.stageNumber;
+      workflow = resolved.workflow;
+      stage = resolved.stage;
+      activeRole = resolved.activeRole;
+      isSystemAdmin = resolved.isSystemAdmin;
+      user = resolved.user;
+    } catch {
+      continue;
+    }
+
+    if (!stageRequiresIssuanceFields(workflow, stageNumber)) {
+      continue;
+    }
+
+    const finalizeStage = await shouldFinalizeEmailStageApproval({
+      formId,
+      stageNumber,
+      stage,
+      activeRole,
+      isSystemAdmin,
+      user,
+    });
+    if (!finalizeStage) {
+      continue;
+    }
+
+    // Auto-generate the email from first and last name: firstname.lastname@iitrpr.ac.in
+    const first = form.firstName.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const last = form.lastName.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const assignedEmailId = `${first}.${last}@iitrpr.ac.in`;
+
+    await addIssueApproval({
+      formId,
+      stage: stageNumber,
+      assignedEmailId,
+      dateOfCreation: sharedDateOfCreation,
+      tentativeRemovalDate: sharedTentativeRemovalDate,
+      idCreatedBy: input.approverName,
+    });
+    await clearStageRoleApprovals(formId, stageNumber);
+  }
+
+  revalidatePath("/dashboard/email-id");
 }

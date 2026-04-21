@@ -1,21 +1,146 @@
 "use server";
 
-import { canAccessApplicantForm, requireRole, requireUser } from "@/lib/auth";
+import { canAccessApplicantForm, requireUser } from "@/lib/auth";
+import { getActiveDelegationForUser } from "@/lib/delegation-store";
 import {
+  approveGuestHouseAtStage,
   approveGuestHouseStage1,
   approveGuestHouseStage2,
   approveGuestHouseStage3,
   createGuestHouseForm,
   getGuestHouseFormById,
+  rejectGuestHouseAtStage,
   rejectGuestHouseStage1,
   rejectGuestHouseStage2,
   rejectGuestHouseStage3,
 } from "@/lib/guest-house-store";
-import { canRoleApproveGuestHouseStage1 } from "@/lib/guest-house-approver-matrix";
+import {
+  getNextStage,
+  getStagesForRole,
+  getWorkflow,
+  getWorkflowStageMode,
+  getWorkflowStageRoleCodes,
+} from "@/lib/workflow-engine";
+import {
+  addRoleApprovalForStage,
+  clearStageRoleApprovals,
+  listApprovedRolesForStage,
+} from "@/lib/workflow-stage-approvals";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+async function getGuestHouseWorkflowOrThrow() {
+  const workflow = await getWorkflow("guest-house");
+  if (!workflow) {
+    throw new Error("Guest House workflow blueprint not found in database.");
+  }
+  return workflow;
+}
+
+async function resolveGuestHouseRoleContext() {
+  const user = await requireUser();
+  const delegation = await getActiveDelegationForUser(user.id);
+  const activeRole = delegation?.delegatedRole ?? user.role;
+
+  if (!activeRole) {
+    throw new Error("You do not have an assigned stakeholder role.");
+  }
+
+  return {
+    user,
+    activeRole,
+    isSystemAdmin: activeRole === "SYSTEM_ADMIN",
+  };
+}
+
+async function resolveGuestHouseActionContext(submissionId: string) {
+  const roleContext = await resolveGuestHouseRoleContext();
+  const workflow = await getGuestHouseWorkflowOrThrow();
+  const form = await getGuestHouseFormById(submissionId);
+
+  if (!form) {
+    throw new Error("Guest house form not found.");
+  }
+  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
+    throw new Error("This request is already finalized.");
+  }
+
+  if (!roleContext.isSystemAdmin) {
+    const roleStages = getStagesForRole(workflow, roleContext.activeRole);
+    if (!roleStages.includes(form.currentStage)) {
+      throw new Error("You are not authorized for the current stage.");
+    }
+  }
+
+  return {
+    ...roleContext,
+    workflow,
+    form,
+  };
+}
+
+async function assertGuestHouseBulkStageAccess(stage: number) {
+  const roleContext = await resolveGuestHouseRoleContext();
+  const workflow = await getGuestHouseWorkflowOrThrow();
+
+  if (!roleContext.isSystemAdmin) {
+    const roleStages = getStagesForRole(workflow, roleContext.activeRole);
+    if (!roleStages.includes(stage)) {
+      throw new Error("You are not authorized to review this stage in bulk.");
+    }
+  }
+
+  return { ...roleContext, workflow };
+}
+
+async function shouldFinalizeGuestHouseStageApproval(input: {
+  submissionId: string;
+  stageNumber: number;
+  activeRole: string;
+  isSystemAdmin: boolean;
+  workflow: Awaited<ReturnType<typeof getGuestHouseWorkflowOrThrow>>;
+  user: { id: string; email: string; fullName?: string | null };
+}) {
+  const stageDefinition = input.workflow.stages.find((stage) => stage.stage === input.stageNumber);
+  if (!stageDefinition) {
+    throw new Error("Current workflow stage is no longer available.");
+  }
+
+  if (input.isSystemAdmin) {
+    return true;
+  }
+
+  const mode = getWorkflowStageMode(stageDefinition);
+  const requiredRoles = getWorkflowStageRoleCodes(stageDefinition).filter((role) => role !== "SYSTEM_ADMIN");
+  if (mode !== "AND" || requiredRoles.length <= 1) {
+    return true;
+  }
+
+  const insertResult = await addRoleApprovalForStage({
+    submissionId: input.submissionId,
+    stageNumber: input.stageNumber,
+    roleCode: input.activeRole,
+    approverUserId: input.user.id,
+    approverEmail: input.user.email,
+    approverName: input.user.fullName ?? null,
+  });
+
+  if (!insertResult.inserted) {
+    throw new Error("This role has already approved this stage. Waiting for remaining approvals.");
+  }
+
+  const approvedRoles = new Set(await listApprovedRolesForStage(input.submissionId, input.stageNumber));
+  return requiredRoles.every((roleCode) => approvedRoles.has(roleCode));
+}
+
 export async function submitGuestHouseForm(formData: FormData) {
+  const FIXED_ARRIVAL_TIME = "13:00";
+  const FIXED_DEPARTURE_TIME = "11:00";
+  const now = new Date();
+  const bookingDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+    now.getDate()
+  ).padStart(2, "0")}`;
+
   const user = await requireUser();
   if (!canAccessApplicantForm(user.email, user.role, "guest-house")) {
     throw new Error("You are not allowed to submit Guest House form.");
@@ -30,12 +155,9 @@ export async function submitGuestHouseForm(formData: FormData) {
   const numberOfRoomsRequired = String(formData.get("numberOfRoomsRequired") ?? "").trim();
   const occupancyType = String(formData.get("occupancyType") ?? "").trim();
   const arrivalDateRaw = String(formData.get("arrivalDate") ?? "").trim();
-  const arrivalTimeRaw = String(formData.get("arrivalTime") ?? "").trim();
   const departureDateRaw = String(formData.get("departureDate") ?? "").trim();
-  const departureTimeRaw = String(formData.get("departureTime") ?? "").trim();
   const roomType = String(formData.get("roomType") ?? "").trim();
   const bookingCategory = String(formData.get("bookingCategory") ?? "").trim();
-  const bookingDate = String(formData.get("bookingDate") ?? "").trim();
   const remarksIfAny = String(formData.get("remarksIfAny") ?? "").trim();
   const budgetDepartment = String(formData.get("budgetDepartment") ?? "").trim();
   const proposerName = String(formData.get("proposerName") ?? "").trim();
@@ -71,12 +193,9 @@ export async function submitGuestHouseForm(formData: FormData) {
     !numberOfRoomsRequired ||
     !occupancyType ||
     !arrivalDateRaw ||
-    !arrivalTimeRaw ||
     !departureDateRaw ||
-    !departureTimeRaw ||
     !roomType ||
     !bookingCategory ||
-    !bookingDate ||
     !proposerName ||
     !proposerDesignation ||
     !proposerDepartment ||
@@ -119,9 +238,9 @@ export async function submitGuestHouseForm(formData: FormData) {
     numberOfRoomsRequired: Number(numberOfRoomsRequired),
     occupancyType: occupancyType === "double" ? "double" : "single",
     arrivalDate: arrivalDateRaw,
-    arrivalTime: arrivalTimeRaw,
+    arrivalTime: FIXED_ARRIVAL_TIME,
     departureDate: departureDateRaw,
-    departureTime: departureTimeRaw,
+    departureTime: FIXED_DEPARTURE_TIME,
     purposeOfBooking,
     roomType: roomType === "business_room" ? "business_room" : "executive_suite",
     bookExecutiveSuite: roomType === "executive_suite",
@@ -145,7 +264,7 @@ export async function submitGuestHouseForm(formData: FormData) {
   });
 
   revalidatePath("/");
-  revalidatePath("/dashboard/guest-house/approving-authority");
+  revalidatePath("/dashboard/guest-house");
   redirect(`/forms/guest-house/${createdId}`);
 }
 
@@ -154,24 +273,29 @@ export async function approveGuestHouseByApprovingAuthority(
   approverName: string,
   remark: string
 ) {
-  const user = await requireUser();
+  const { form, workflow, activeRole, isSystemAdmin, user } =
+    await resolveGuestHouseActionContext(submissionId);
 
   if (!approverName.trim() || !remark.trim()) {
     throw new Error("Approver name and remark are required.");
   }
 
-  const form = await getGuestHouseFormById(submissionId);
-  if (!form) {
-    throw new Error("Guest house form not found.");
+  if (form.currentStage !== 1) {
+    throw new Error("This request is not in the expected stage for this action.");
   }
 
-  if (
-    !canRoleApproveGuestHouseStage1(user.role, {
-      roomType: form.roomType,
-      bookingCategory: form.bookingCategory ?? "",
-    })
-  ) {
-    throw new Error("You are not authorized to approve Stage 1 for this booking category.");
+  const finalizeStage = await shouldFinalizeGuestHouseStageApproval({
+    submissionId,
+    stageNumber: form.currentStage,
+    activeRole,
+    isSystemAdmin,
+    workflow,
+    user,
+  });
+  if (!finalizeStage) {
+    revalidatePath("/dashboard/guest-house");
+    revalidatePath(`/dashboard/guest-house/${submissionId}`);
+    return;
   }
 
   await approveGuestHouseStage1({
@@ -179,9 +303,9 @@ export async function approveGuestHouseByApprovingAuthority(
     approverName: approverName.trim(),
     remark: remark.trim(),
   });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
-  revalidatePath("/dashboard/guest-house/approving-authority");
-  revalidatePath("/dashboard/guest-house/in-charge");
+  revalidatePath("/dashboard/guest-house");
   revalidatePath(`/dashboard/guest-house/${submissionId}`);
   revalidatePath(`/forms/guest-house/${submissionId}`);
 }
@@ -191,24 +315,14 @@ export async function rejectGuestHouseByApprovingAuthority(
   approverName: string,
   remark: string
 ) {
-  const user = await requireUser();
+  const { form } = await resolveGuestHouseActionContext(submissionId);
 
   if (!approverName.trim() || !remark.trim()) {
     throw new Error("Approver name and rejection remark are required.");
   }
 
-  const form = await getGuestHouseFormById(submissionId);
-  if (!form) {
-    throw new Error("Guest house form not found.");
-  }
-
-  if (
-    !canRoleApproveGuestHouseStage1(user.role, {
-      roomType: form.roomType,
-      bookingCategory: form.bookingCategory ?? "",
-    })
-  ) {
-    throw new Error("You are not authorized to reject Stage 1 for this booking category.");
+  if (form.currentStage !== 1) {
+    throw new Error("This request is not in the expected stage for this action.");
   }
 
   await rejectGuestHouseStage1({
@@ -216,8 +330,9 @@ export async function rejectGuestHouseByApprovingAuthority(
     approverName: approverName.trim(),
     remark: remark.trim(),
   });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
-  revalidatePath("/dashboard/guest-house/approving-authority");
+  revalidatePath("/dashboard/guest-house");
   revalidatePath(`/dashboard/guest-house/${submissionId}`);
   revalidatePath(`/forms/guest-house/${submissionId}`);
 }
@@ -231,7 +346,8 @@ export async function approveGuestHouseByIncharge(input: {
   checkOutDateTime: string;
   officeRemarks: string;
 }) {
-  await requireRole(["GUEST_HOUSE_INCHARGE", "SYSTEM_ADMIN"]);
+  const { form, workflow, activeRole, isSystemAdmin, user } =
+    await resolveGuestHouseActionContext(input.submissionId);
 
   if (
     !input.approverName.trim() ||
@@ -244,6 +360,24 @@ export async function approveGuestHouseByIncharge(input: {
     throw new Error("All Stage 2 fields are required.");
   }
 
+  if (form.currentStage !== 2) {
+    throw new Error("This request is not in the expected stage for this action.");
+  }
+
+  const finalizeStage = await shouldFinalizeGuestHouseStageApproval({
+    submissionId: input.submissionId,
+    stageNumber: form.currentStage,
+    activeRole,
+    isSystemAdmin,
+    workflow,
+    user,
+  });
+  if (!finalizeStage) {
+    revalidatePath("/dashboard/guest-house");
+    revalidatePath(`/dashboard/guest-house/${input.submissionId}`);
+    return;
+  }
+
   await approveGuestHouseStage2({
     submissionId: input.submissionId,
     approverName: input.approverName.trim(),
@@ -253,9 +387,9 @@ export async function approveGuestHouseByIncharge(input: {
     checkOutDateTime: input.checkOutDateTime.trim(),
     officeRemarks: input.officeRemarks.trim(),
   });
+  await clearStageRoleApprovals(input.submissionId, form.currentStage);
 
-  revalidatePath("/dashboard/guest-house/in-charge");
-  revalidatePath("/dashboard/guest-house/chairman");
+  revalidatePath("/dashboard/guest-house");
   revalidatePath(`/dashboard/guest-house/${input.submissionId}`);
   revalidatePath(`/forms/guest-house/${input.submissionId}`);
 }
@@ -265,10 +399,14 @@ export async function rejectGuestHouseByIncharge(
   approverName: string,
   remark: string
 ) {
-  await requireRole(["GUEST_HOUSE_INCHARGE", "SYSTEM_ADMIN"]);
+  const { form } = await resolveGuestHouseActionContext(submissionId);
 
   if (!approverName.trim() || !remark.trim()) {
     throw new Error("Approver name and rejection remark are required.");
+  }
+
+  if (form.currentStage !== 2) {
+    throw new Error("This request is not in the expected stage for this action.");
   }
 
   await rejectGuestHouseStage2({
@@ -276,8 +414,9 @@ export async function rejectGuestHouseByIncharge(
     approverName: approverName.trim(),
     remark: remark.trim(),
   });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
-  revalidatePath("/dashboard/guest-house/in-charge");
+  revalidatePath("/dashboard/guest-house");
   revalidatePath(`/dashboard/guest-house/${submissionId}`);
   revalidatePath(`/forms/guest-house/${submissionId}`);
 }
@@ -287,10 +426,29 @@ export async function approveGuestHouseByChairman(
   approverName: string,
   remark: string
 ) {
-  await requireRole(["GUEST_HOUSE_COMMITTEE_CHAIR", "SYSTEM_ADMIN"]);
+  const { form, workflow, activeRole, isSystemAdmin, user } =
+    await resolveGuestHouseActionContext(submissionId);
 
   if (!approverName.trim() || !remark.trim()) {
     throw new Error("Approver name and remark are required.");
+  }
+
+  if (form.currentStage !== 3) {
+    throw new Error("This request is not in the expected stage for this action.");
+  }
+
+  const finalizeStage = await shouldFinalizeGuestHouseStageApproval({
+    submissionId,
+    stageNumber: form.currentStage,
+    activeRole,
+    isSystemAdmin,
+    workflow,
+    user,
+  });
+  if (!finalizeStage) {
+    revalidatePath("/dashboard/guest-house");
+    revalidatePath(`/dashboard/guest-house/${submissionId}`);
+    return;
   }
 
   await approveGuestHouseStage3({
@@ -298,8 +456,9 @@ export async function approveGuestHouseByChairman(
     approverName: approverName.trim(),
     remark: remark.trim(),
   });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
-  revalidatePath("/dashboard/guest-house/chairman");
+  revalidatePath("/dashboard/guest-house");
   revalidatePath(`/dashboard/guest-house/${submissionId}`);
   revalidatePath(`/forms/guest-house/${submissionId}`);
 }
@@ -309,10 +468,14 @@ export async function rejectGuestHouseByChairman(
   approverName: string,
   remark: string
 ) {
-  await requireRole(["GUEST_HOUSE_COMMITTEE_CHAIR", "SYSTEM_ADMIN"]);
+  const { form } = await resolveGuestHouseActionContext(submissionId);
 
   if (!approverName.trim() || !remark.trim()) {
     throw new Error("Approver name and rejection remark are required.");
+  }
+
+  if (form.currentStage !== 3) {
+    throw new Error("This request is not in the expected stage for this action.");
   }
 
   await rejectGuestHouseStage3({
@@ -320,8 +483,73 @@ export async function rejectGuestHouseByChairman(
     approverName: approverName.trim(),
     remark: remark.trim(),
   });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
-  revalidatePath("/dashboard/guest-house/chairman");
+  revalidatePath("/dashboard/guest-house");
+  revalidatePath(`/dashboard/guest-house/${submissionId}`);
+  revalidatePath(`/forms/guest-house/${submissionId}`);
+}
+
+export async function approveGuestHouseAtCurrentStage(
+  submissionId: string,
+  approverName: string,
+  remark: string
+) {
+  const { form, workflow, activeRole, isSystemAdmin, user } =
+    await resolveGuestHouseActionContext(submissionId);
+
+  if (!approverName.trim() || !remark.trim()) {
+    throw new Error("Approver name and remark are required.");
+  }
+
+  const finalizeStage = await shouldFinalizeGuestHouseStageApproval({
+    submissionId,
+    stageNumber: form.currentStage,
+    activeRole,
+    isSystemAdmin,
+    workflow,
+    user,
+  });
+  if (!finalizeStage) {
+    revalidatePath("/dashboard/guest-house");
+    revalidatePath(`/dashboard/guest-house/${submissionId}`);
+    return;
+  }
+
+  const nextStage = getNextStage(workflow, form.currentStage);
+  await approveGuestHouseAtStage({
+    submissionId,
+    stageNumber: form.currentStage,
+    nextStage: nextStage ?? form.currentStage,
+    markApproved: nextStage === null,
+    recommendationText: `${activeRole}: ${approverName.trim()} | ${remark.trim()}`,
+  });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
+
+  revalidatePath("/dashboard/guest-house");
+  revalidatePath(`/dashboard/guest-house/${submissionId}`);
+  revalidatePath(`/forms/guest-house/${submissionId}`);
+}
+
+export async function rejectGuestHouseAtCurrentStage(
+  submissionId: string,
+  approverName: string,
+  remark: string
+) {
+  const { form, activeRole } = await resolveGuestHouseActionContext(submissionId);
+
+  if (!approverName.trim() || !remark.trim()) {
+    throw new Error("Approver name and rejection remark are required.");
+  }
+
+  await rejectGuestHouseAtStage({
+    submissionId,
+    stageNumber: form.currentStage,
+    recommendationText: `Rejected by ${activeRole}: ${approverName.trim()} | ${remark.trim()}`,
+  });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
+
+  revalidatePath("/dashboard/guest-house");
   revalidatePath(`/dashboard/guest-house/${submissionId}`);
   revalidatePath(`/forms/guest-house/${submissionId}`);
 }
@@ -331,7 +559,7 @@ export async function bulkReviewGuestHouseForms(input: {
   decision: "approve" | "reject";
   approverName: string;
   remark: string;
-  stage: 1 | 2 | 3;
+  stage: number;
 }) {
   if (!input.submissionIds.length) {
     throw new Error("No forms selected for bulk review.");
@@ -341,52 +569,62 @@ export async function bulkReviewGuestHouseForms(input: {
     throw new Error("Approver name and remark are required.");
   }
 
-  if (input.stage === 1) {
-    const user = await requireUser();
-
-    for (const submissionId of input.submissionIds) {
-      const form = await getGuestHouseFormById(submissionId);
-      if (!form) {
-        throw new Error(`Guest house form not found: ${submissionId}`);
-      }
-
-      if (
-        !canRoleApproveGuestHouseStage1(user.role, {
-          roomType: form.roomType,
-          bookingCategory: form.bookingCategory ?? "",
-        })
-      ) {
-        throw new Error(
-          `You are not authorized to review Stage 1 for ${form.guestName} (${form.bookingCategory ?? "N/A"}).`
-        );
-      }
-    }
-  } else if (input.stage === 2) {
-    await requireRole(["GUEST_HOUSE_INCHARGE", "SYSTEM_ADMIN"]);
-  } else {
-    await requireRole(["GUEST_HOUSE_COMMITTEE_CHAIR", "SYSTEM_ADMIN"]);
-  }
+  const { user, activeRole, isSystemAdmin, workflow } = await assertGuestHouseBulkStageAccess(input.stage);
 
   for (const submissionId of input.submissionIds) {
+    const form = await getGuestHouseFormById(submissionId);
+    if (!form || form.currentStage !== input.stage) {
+      continue;
+    }
+    if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
+      continue;
+    }
+
     if (input.stage === 1) {
       if (input.decision === "approve") {
+        const finalizeStage = await shouldFinalizeGuestHouseStageApproval({
+          submissionId,
+          stageNumber: form.currentStage,
+          activeRole,
+          isSystemAdmin,
+          workflow,
+          user,
+        });
+        if (!finalizeStage) {
+          continue;
+        }
+
         await approveGuestHouseStage1({
           submissionId,
           approverName: input.approverName,
           remark: input.remark,
         });
+        await clearStageRoleApprovals(submissionId, form.currentStage);
       } else {
         await rejectGuestHouseStage1({
           submissionId,
           approverName: input.approverName,
           remark: input.remark,
         });
+        await clearStageRoleApprovals(submissionId, form.currentStage);
       }
       continue;
     }
 
     if (input.stage === 2) {
       if (input.decision === "approve") {
+        const finalizeStage = await shouldFinalizeGuestHouseStageApproval({
+          submissionId,
+          stageNumber: form.currentStage,
+          activeRole,
+          isSystemAdmin,
+          workflow,
+          user,
+        });
+        if (!finalizeStage) {
+          continue;
+        }
+
         await approveGuestHouseStage2({
           submissionId,
           approverName: input.approverName,
@@ -396,32 +634,80 @@ export async function bulkReviewGuestHouseForms(input: {
           checkOutDateTime: new Date().toISOString(),
           officeRemarks: input.remark,
         });
+        await clearStageRoleApprovals(submissionId, form.currentStage);
       } else {
         await rejectGuestHouseStage2({
           submissionId,
           approverName: input.approverName,
           remark: input.remark,
         });
+        await clearStageRoleApprovals(submissionId, form.currentStage);
+      }
+      continue;
+    }
+
+    if (input.stage === 3) {
+      if (input.decision === "approve") {
+        const finalizeStage = await shouldFinalizeGuestHouseStageApproval({
+          submissionId,
+          stageNumber: form.currentStage,
+          activeRole,
+          isSystemAdmin,
+          workflow,
+          user,
+        });
+        if (!finalizeStage) {
+          continue;
+        }
+
+        await approveGuestHouseStage3({
+          submissionId,
+          approverName: input.approverName,
+          remark: input.remark,
+        });
+        await clearStageRoleApprovals(submissionId, form.currentStage);
+      } else {
+        await rejectGuestHouseStage3({
+          submissionId,
+          approverName: input.approverName,
+          remark: input.remark,
+        });
+        await clearStageRoleApprovals(submissionId, form.currentStage);
       }
       continue;
     }
 
     if (input.decision === "approve") {
-      await approveGuestHouseStage3({
+      const finalizeStage = await shouldFinalizeGuestHouseStageApproval({
         submissionId,
-        approverName: input.approverName,
-        remark: input.remark,
+        stageNumber: form.currentStage,
+        activeRole,
+        isSystemAdmin,
+        workflow,
+        user,
       });
+      if (!finalizeStage) {
+        continue;
+      }
+
+      const nextStage = getNextStage(workflow, form.currentStage);
+      await approveGuestHouseAtStage({
+        submissionId,
+        stageNumber: form.currentStage,
+        nextStage: nextStage ?? form.currentStage,
+        markApproved: nextStage === null,
+        recommendationText: `${activeRole}: ${input.approverName} | ${input.remark}`,
+      });
+      await clearStageRoleApprovals(submissionId, form.currentStage);
     } else {
-      await rejectGuestHouseStage3({
+      await rejectGuestHouseAtStage({
         submissionId,
-        approverName: input.approverName,
-        remark: input.remark,
+        stageNumber: form.currentStage,
+        recommendationText: `Rejected by ${activeRole}: ${input.approverName} | ${input.remark}`,
       });
+      await clearStageRoleApprovals(submissionId, form.currentStage);
     }
   }
 
-  revalidatePath("/dashboard/guest-house/approving-authority");
-  revalidatePath("/dashboard/guest-house/in-charge");
-  revalidatePath("/dashboard/guest-house/chairman");
+  revalidatePath("/dashboard/guest-house");
 }

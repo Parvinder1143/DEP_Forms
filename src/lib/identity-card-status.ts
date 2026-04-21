@@ -14,7 +14,7 @@ export function getIdentityCardStatusText(form: IdentityCardFormRecord) {
   }
 
   if (form.currentStage === 3) {
-    return "Pending - Recommended by Deputy Registrar";
+    return "Pending - Recommended by Establishment";
   }
   if (form.currentStage === 2) {
     return "Pending - Forwarded by HoD / Section Head";

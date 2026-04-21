@@ -1,24 +1,145 @@
 "use server";
 
-import { requireRole } from "@/lib/auth";
+import { requireRole, requireUser } from "@/lib/auth";
+import { getActiveDelegationForUser } from "@/lib/delegation-store";
 import {
   approveVehicleStickerStage1,
   approveVehicleStickerStage2,
   approveVehicleStickerStage3,
-  approveVehicleStickerStage4,
+  approveVehicleStickerAtStage,
   createVehicleStickerForm,
   getVehicleStickerFormById,
   rejectVehicleStickerStage1,
   rejectVehicleStickerStage2,
   rejectVehicleStickerStage3,
-  rejectVehicleStickerStage4,
+  rejectVehicleStickerAtStage,
   upsertVehicleStickerAttachmentsForSubmission,
 } from "@/lib/vehicle-sticker-store";
+import {
+  getNextStage,
+  getStagesForRole,
+  getWorkflow,
+  getWorkflowStageMode,
+  getWorkflowStageRoleCodes,
+} from "@/lib/workflow-engine";
+import {
+  addRoleApprovalForStage,
+  clearStageRoleApprovals,
+  listApprovedRolesForStage,
+} from "@/lib/workflow-stage-approvals";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+async function getVehicleStickerWorkflowOrThrow() {
+  const workflow = await getWorkflow("vehicle-sticker");
+  if (!workflow) {
+    throw new Error("Vehicle Sticker workflow blueprint not found in database.");
+  }
+  return workflow;
+}
+
+async function resolveVehicleStickerRoleContext() {
+  const user = await requireUser();
+  const delegation = await getActiveDelegationForUser(user.id);
+  const activeRole = delegation?.delegatedRole ?? user.role;
+
+  if (!activeRole) {
+    throw new Error("You do not have an assigned stakeholder role.");
+  }
+
+  return {
+    user,
+    activeRole,
+    isSystemAdmin: activeRole === "SYSTEM_ADMIN",
+  };
+}
+
+async function resolveVehicleStickerActionContext(submissionId: string) {
+  const roleContext = await resolveVehicleStickerRoleContext();
+  const workflow = await getVehicleStickerWorkflowOrThrow();
+
+  const form = await getVehicleStickerFormById(submissionId);
+  if (!form) {
+    throw new Error("Vehicle sticker form not found.");
+  }
+  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
+    throw new Error("This request is already finalized.");
+  }
+
+  if (!roleContext.isSystemAdmin) {
+    const stages = getStagesForRole(workflow, roleContext.activeRole);
+    if (!stages.includes(form.currentStage)) {
+      throw new Error("You are not authorized for the current stage.");
+    }
+  }
+
+  return {
+    ...roleContext,
+    workflow,
+    form,
+  };
+}
+
+async function assertVehicleStickerBulkStageAccess(stage: number) {
+  const roleContext = await resolveVehicleStickerRoleContext();
+  const workflow = await getVehicleStickerWorkflowOrThrow();
+
+  if (!roleContext.isSystemAdmin) {
+    const roleStages = getStagesForRole(workflow, roleContext.activeRole);
+    if (!roleStages.includes(stage)) {
+      throw new Error("You are not authorized to review this stage in bulk.");
+    }
+  }
+
+  return { ...roleContext, workflow };
+}
+
+async function shouldFinalizeVehicleStickerStageApproval(input: {
+  submissionId: string;
+  stageNumber: number;
+  activeRole: string;
+  isSystemAdmin: boolean;
+  workflow: Awaited<ReturnType<typeof getVehicleStickerWorkflowOrThrow>>;
+  user: { id: string; email: string; fullName?: string | null };
+}) {
+  const stageDefinition = input.workflow.stages.find((stage) => stage.stage === input.stageNumber);
+  if (!stageDefinition) {
+    throw new Error("Current workflow stage is no longer available.");
+  }
+
+  if (input.isSystemAdmin) {
+    return true;
+  }
+
+  const mode = getWorkflowStageMode(stageDefinition);
+  const requiredRoles = getWorkflowStageRoleCodes(stageDefinition).filter((role) => role !== "SYSTEM_ADMIN");
+  if (mode !== "AND" || requiredRoles.length <= 1) {
+    return true;
+  }
+
+  const insertResult = await addRoleApprovalForStage({
+    submissionId: input.submissionId,
+    stageNumber: input.stageNumber,
+    roleCode: input.activeRole,
+    approverUserId: input.user.id,
+    approverEmail: input.user.email,
+    approverName: input.user.fullName ?? null,
+  });
+
+  if (!insertResult.inserted) {
+    throw new Error("This role has already approved this stage. Waiting for remaining approvals.");
+  }
+
+  const approvedRoles = new Set(await listApprovedRolesForStage(input.submissionId, input.stageNumber));
+  return requiredRoles.every((roleCode) => approvedRoles.has(roleCode));
+}
+
 export async function submitVehicleStickerForm(formData: FormData) {
   const user = await requireRole(["STUDENT", "INTERN", "EMPLOYEE"]);
+  const now = new Date();
+  const declarationDateRaw = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+    now.getDate()
+  ).padStart(2, "0")}`;
 
   const registrationNo = String(formData.get("vehicleRegistrationNo") ?? "").trim();
   const vehicleType = String(formData.get("vehicleType") ?? "").trim();
@@ -67,7 +188,6 @@ export async function submitVehicleStickerForm(formData: FormData) {
   const emailContact = String(formData.get("emailContact") ?? "").trim();
   const drivingLicenseNo = String(formData.get("drivingLicenseNo") ?? "").trim();
   const dlValidUpto = String(formData.get("dlValidUpto") ?? "").trim();
-  const declarationDateRaw = String(formData.get("declarationDate") ?? "").trim();
 
   if (
     !applicantName ||
@@ -78,8 +198,7 @@ export async function submitVehicleStickerForm(formData: FormData) {
     !phone ||
     !emailContact ||
     !drivingLicenseNo ||
-    !dlValidUpto ||
-    !declarationDateRaw
+    !dlValidUpto
   ) {
     throw new Error("Please fill all required fields.");
   }
@@ -133,24 +252,31 @@ export async function approveVehicleStickerBySupervisor(
   submissionId: string,
   approverName: string
 ) {
-  await requireRole(["SUPERVISOR", "SYSTEM_ADMIN"]);
-
-  const form = await getVehicleStickerFormById(submissionId);
-  if (!form) {
-    throw new Error("Vehicle sticker form not found.");
-  }
-  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
-    throw new Error("This request is already finalized.");
-  }
+  const { form, workflow, activeRole, isSystemAdmin, user } =
+    await resolveVehicleStickerActionContext(submissionId);
   if (form.currentStage !== 1) {
-    throw new Error("This form is not at Supervisor stage.");
+    throw new Error("This request is not in the expected stage for this action.");
+  }
+
+  const finalizeStage = await shouldFinalizeVehicleStickerStageApproval({
+    submissionId,
+    stageNumber: form.currentStage,
+    activeRole,
+    isSystemAdmin,
+    workflow,
+    user,
+  });
+  if (!finalizeStage) {
+    revalidatePath(`/dashboard/vehicle-sticker/${submissionId}`);
+    revalidatePath("/dashboard/vehicle-sticker");
+    return;
   }
 
   await approveVehicleStickerStage1({ submissionId, approverName });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
   revalidatePath(`/dashboard/vehicle-sticker/${submissionId}`);
-  revalidatePath("/dashboard/vehicle-sticker/supervisor");
-  revalidatePath("/dashboard/vehicle-sticker/hod");
+  revalidatePath("/dashboard/vehicle-sticker");
   revalidatePath(`/forms/vehicle-sticker/${submissionId}`);
 }
 
@@ -159,52 +285,64 @@ export async function rejectVehicleStickerBySupervisor(
   approverName: string,
   remark: string
 ) {
-  await requireRole(["SUPERVISOR", "SYSTEM_ADMIN"]);
-
   if (!remark.trim()) {
     throw new Error("Rejection remark is required.");
   }
 
-  const form = await getVehicleStickerFormById(submissionId);
-  if (!form) {
-    throw new Error("Vehicle sticker form not found.");
-  }
-  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
-    throw new Error("This request is already finalized.");
-  }
+  const { form } = await resolveVehicleStickerActionContext(submissionId);
   if (form.currentStage !== 1) {
-    throw new Error("This form is not at Supervisor stage.");
+    throw new Error("This request is not in the expected stage for this action.");
   }
 
   await rejectVehicleStickerStage1({ submissionId, approverName, remark: remark.trim() });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
   revalidatePath(`/dashboard/vehicle-sticker/${submissionId}`);
-  revalidatePath("/dashboard/vehicle-sticker/supervisor");
+  revalidatePath("/dashboard/vehicle-sticker");
   revalidatePath(`/forms/vehicle-sticker/${submissionId}`);
 }
 
 export async function approveVehicleStickerByHod(
   submissionId: string,
-  approverName: string
+  approverName: string,
+  validUpto: string
 ) {
-  await requireRole(["HOD", "SYSTEM_ADMIN"]);
+  if (!validUpto.trim()) {
+    throw new Error("Valid upto date is required.");
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(validUpto.trim())) {
+    throw new Error("Valid upto date must be in YYYY-MM-DD format.");
+  }
 
-  const form = await getVehicleStickerFormById(submissionId);
-  if (!form) {
-    throw new Error("Vehicle sticker form not found.");
-  }
-  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
-    throw new Error("This request is already finalized.");
-  }
+  const { form, workflow, activeRole, isSystemAdmin, user } =
+    await resolveVehicleStickerActionContext(submissionId);
   if (form.currentStage !== 2) {
-    throw new Error("This form is not at HoD stage.");
+    throw new Error("This request is not in the expected stage for this action.");
   }
 
-  await approveVehicleStickerStage2({ submissionId, approverName });
+  const finalizeStage = await shouldFinalizeVehicleStickerStageApproval({
+    submissionId,
+    stageNumber: form.currentStage,
+    activeRole,
+    isSystemAdmin,
+    workflow,
+    user,
+  });
+  if (!finalizeStage) {
+    revalidatePath(`/dashboard/vehicle-sticker/${submissionId}`);
+    revalidatePath("/dashboard/vehicle-sticker");
+    return;
+  }
+
+  await approveVehicleStickerStage2({
+    submissionId,
+    approverName,
+    validUpto: validUpto.trim(),
+  });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
   revalidatePath(`/dashboard/vehicle-sticker/${submissionId}`);
-  revalidatePath("/dashboard/vehicle-sticker/hod");
-  revalidatePath("/dashboard/vehicle-sticker/student-affairs-hostel-mgmt");
+  revalidatePath("/dashboard/vehicle-sticker");
   revalidatePath(`/forms/vehicle-sticker/${submissionId}`);
 }
 
@@ -213,27 +351,20 @@ export async function rejectVehicleStickerByHod(
   approverName: string,
   remark: string
 ) {
-  await requireRole(["HOD", "SYSTEM_ADMIN"]);
-
   if (!remark.trim()) {
     throw new Error("Rejection remark is required.");
   }
 
-  const form = await getVehicleStickerFormById(submissionId);
-  if (!form) {
-    throw new Error("Vehicle sticker form not found.");
-  }
-  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
-    throw new Error("This request is already finalized.");
-  }
+  const { form } = await resolveVehicleStickerActionContext(submissionId);
   if (form.currentStage !== 2) {
-    throw new Error("This form is not at HoD stage.");
+    throw new Error("This request is not in the expected stage for this action.");
   }
 
   await rejectVehicleStickerStage2({ submissionId, approverName, remark: remark.trim() });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
   revalidatePath(`/dashboard/vehicle-sticker/${submissionId}`);
-  revalidatePath("/dashboard/vehicle-sticker/hod");
+  revalidatePath("/dashboard/vehicle-sticker");
   revalidatePath(`/forms/vehicle-sticker/${submissionId}`);
 }
 
@@ -243,17 +374,24 @@ export async function approveVehicleStickerByStudentAffairsHostel(
   residingInHostel: boolean,
   recommendationText: string
 ) {
-  await requireRole(["STUDENT_AFFAIRS_HOSTEL_MGMT", "SYSTEM_ADMIN"]);
-
-  const form = await getVehicleStickerFormById(submissionId);
-  if (!form) {
-    throw new Error("Vehicle sticker form not found.");
-  }
-  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
-    throw new Error("This request is already finalized.");
-  }
+  const { form, workflow, activeRole, isSystemAdmin, user } =
+    await resolveVehicleStickerActionContext(submissionId);
   if (form.currentStage !== 3) {
-    throw new Error("This form is not at Student Affairs stage.");
+    throw new Error("This request is not in the expected stage for this action.");
+  }
+
+  const finalizeStage = await shouldFinalizeVehicleStickerStageApproval({
+    submissionId,
+    stageNumber: form.currentStage,
+    activeRole,
+    isSystemAdmin,
+    workflow,
+    user,
+  });
+  if (!finalizeStage) {
+    revalidatePath(`/dashboard/vehicle-sticker/${submissionId}`);
+    revalidatePath("/dashboard/vehicle-sticker");
+    return;
   }
 
   await approveVehicleStickerStage3({
@@ -262,10 +400,10 @@ export async function approveVehicleStickerByStudentAffairsHostel(
     residingInHostel,
     recommendationText,
   });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
   revalidatePath(`/dashboard/vehicle-sticker/${submissionId}`);
-  revalidatePath("/dashboard/vehicle-sticker/student-affairs-hostel-mgmt");
-  revalidatePath("/dashboard/vehicle-sticker/security-office");
+  revalidatePath("/dashboard/vehicle-sticker");
   revalidatePath(`/forms/vehicle-sticker/${submissionId}`);
 }
 
@@ -274,27 +412,20 @@ export async function rejectVehicleStickerByStudentAffairsHostel(
   approverName: string,
   remark: string
 ) {
-  await requireRole(["STUDENT_AFFAIRS_HOSTEL_MGMT", "SYSTEM_ADMIN"]);
-
   if (!remark.trim()) {
     throw new Error("Rejection remark is required.");
   }
 
-  const form = await getVehicleStickerFormById(submissionId);
-  if (!form) {
-    throw new Error("Vehicle sticker form not found.");
-  }
-  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
-    throw new Error("This request is already finalized.");
-  }
+  const { form } = await resolveVehicleStickerActionContext(submissionId);
   if (form.currentStage !== 3) {
-    throw new Error("This form is not at Student Affairs stage.");
+    throw new Error("This request is not in the expected stage for this action.");
   }
 
   await rejectVehicleStickerStage3({ submissionId, approverName, remark: remark.trim() });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
   revalidatePath(`/dashboard/vehicle-sticker/${submissionId}`);
-  revalidatePath("/dashboard/vehicle-sticker/student-affairs-hostel-mgmt");
+  revalidatePath("/dashboard/vehicle-sticker");
   revalidatePath(`/forms/vehicle-sticker/${submissionId}`);
 }
 
@@ -305,29 +436,54 @@ export async function issueVehicleStickerBySecurityOffice(
   validUpto: string,
   issueDate: string
 ) {
-  await requireRole(["SECURITY_OFFICE", "SYSTEM_ADMIN"]);
-
-  const form = await getVehicleStickerFormById(submissionId);
-  if (!form) {
-    throw new Error("Vehicle sticker form not found.");
+  if (!issuedStickerNo.trim()) {
+    throw new Error("Sticker number is required.");
   }
-  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
-    throw new Error("This request is already finalized.");
+  if (!validUpto.trim()) {
+    throw new Error("Valid upto date is required.");
   }
-  if (form.currentStage !== 4) {
-    throw new Error("This form is not at Security Office stage.");
+  if (!issueDate.trim()) {
+    throw new Error("Issue date is required.");
   }
 
-  await approveVehicleStickerStage4({
+  const { form, workflow, activeRole, isSystemAdmin, user } =
+    await resolveVehicleStickerActionContext(submissionId);
+  const isFinalStage = getNextStage(workflow, form.currentStage) === null;
+  if (!isFinalStage) {
+    throw new Error("This action is allowed only at the final stage.");
+  }
+
+  const finalizeStage = await shouldFinalizeVehicleStickerStageApproval({
     submissionId,
-    approverName,
-    issuedStickerNo,
-    validUpto,
-    issueDate,
+    stageNumber: form.currentStage,
+    activeRole,
+    isSystemAdmin,
+    workflow,
+    user,
   });
+  if (!finalizeStage) {
+    revalidatePath(`/dashboard/vehicle-sticker/${submissionId}`);
+    revalidatePath("/dashboard/vehicle-sticker");
+    return;
+  }
+
+  const nextStage = getNextStage(workflow, form.currentStage);
+  const markApproved = nextStage === null;
+
+  await approveVehicleStickerAtStage({
+    submissionId,
+    stageNumber: form.currentStage,
+    nextStage: nextStage ?? form.currentStage,
+    markApproved,
+    recommendationText: `Security Office: ${approverName}`,
+    issuedStickerNo: issuedStickerNo.trim(),
+    validUpto: validUpto.trim(),
+    issueDate: issueDate.trim(),
+  });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
   revalidatePath(`/dashboard/vehicle-sticker/${submissionId}`);
-  revalidatePath("/dashboard/vehicle-sticker/security-office");
+  revalidatePath("/dashboard/vehicle-sticker");
   revalidatePath(`/forms/vehicle-sticker/${submissionId}`);
 }
 
@@ -336,27 +492,90 @@ export async function rejectVehicleStickerBySecurityOffice(
   approverName: string,
   remark: string
 ) {
-  await requireRole(["SECURITY_OFFICE", "SYSTEM_ADMIN"]);
-
   if (!remark.trim()) {
     throw new Error("Rejection remark is required.");
   }
 
-  const form = await getVehicleStickerFormById(submissionId);
-  if (!form) {
-    throw new Error("Vehicle sticker form not found.");
-  }
-  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
-    throw new Error("This request is already finalized.");
-  }
+  const { form } = await resolveVehicleStickerActionContext(submissionId);
   if (form.currentStage !== 4) {
-    throw new Error("This form is not at Security Office stage.");
+    throw new Error("This request is not in the expected stage for this action.");
   }
 
-  await rejectVehicleStickerStage4({ submissionId, approverName, remark: remark.trim() });
+  await rejectVehicleStickerAtStage({
+    submissionId,
+    stageNumber: form.currentStage,
+    recommendationText: `Rejected by Security Office: ${approverName} | ${remark.trim()}`,
+  });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
   revalidatePath(`/dashboard/vehicle-sticker/${submissionId}`);
-  revalidatePath("/dashboard/vehicle-sticker/security-office");
+  revalidatePath("/dashboard/vehicle-sticker");
+  revalidatePath(`/forms/vehicle-sticker/${submissionId}`);
+}
+
+export async function approveVehicleStickerAtCurrentStage(
+  submissionId: string,
+  approverName: string,
+  remark: string
+) {
+  const { form, workflow, activeRole, isSystemAdmin, user } =
+    await resolveVehicleStickerActionContext(submissionId);
+
+  if (!approverName.trim()) {
+    throw new Error("Approver name is required.");
+  }
+  if (!remark.trim()) {
+    throw new Error("Approval remark is required.");
+  }
+
+  const finalizeStage = await shouldFinalizeVehicleStickerStageApproval({
+    submissionId,
+    stageNumber: form.currentStage,
+    activeRole,
+    isSystemAdmin,
+    workflow,
+    user,
+  });
+  if (!finalizeStage) {
+    revalidatePath(`/dashboard/vehicle-sticker/${submissionId}`);
+    revalidatePath("/dashboard/vehicle-sticker");
+    return;
+  }
+
+  const nextStage = getNextStage(workflow, form.currentStage);
+  await approveVehicleStickerAtStage({
+    submissionId,
+    stageNumber: form.currentStage,
+    nextStage: nextStage ?? form.currentStage,
+    markApproved: nextStage === null,
+    recommendationText: `${activeRole}: ${approverName.trim()} | ${remark.trim()}`,
+  });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
+
+  revalidatePath(`/dashboard/vehicle-sticker/${submissionId}`);
+  revalidatePath("/dashboard/vehicle-sticker");
+  revalidatePath(`/forms/vehicle-sticker/${submissionId}`);
+}
+
+export async function rejectVehicleStickerAtCurrentStage(
+  submissionId: string,
+  approverName: string,
+  remark: string
+) {
+  if (!remark.trim()) {
+    throw new Error("Rejection remark is required.");
+  }
+
+  const { form, activeRole } = await resolveVehicleStickerActionContext(submissionId);
+  await rejectVehicleStickerAtStage({
+    submissionId,
+    stageNumber: form.currentStage,
+    recommendationText: `Rejected by ${activeRole}: ${approverName.trim()} | ${remark.trim()}`,
+  });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
+
+  revalidatePath(`/dashboard/vehicle-sticker/${submissionId}`);
+  revalidatePath("/dashboard/vehicle-sticker");
   revalidatePath(`/forms/vehicle-sticker/${submissionId}`);
 }
 
@@ -439,12 +658,21 @@ function getVehicleStickerNoForBulk(submissionId: string, index: number) {
   return `VS-${new Date().getFullYear()}-${seed}-${index + 1}`;
 }
 
+function getIssuedStickerNoFromBulkInput(baseStickerNo: string, index: number, total: number) {
+  if (total <= 1) {
+    return baseStickerNo.trim();
+  }
+  return `${baseStickerNo.trim()}-${index + 1}`;
+}
+
 export async function bulkReviewVehicleStickerForms(input: {
   submissionIds: string[];
   decision: "approve" | "reject";
   approverName: string;
   remark: string;
-  stage: 1 | 2 | 3 | 4;
+  stage: number;
+  validUpto?: string;
+  issuedStickerNo?: string;
 }) {
   const ids = input.submissionIds.filter(Boolean);
   if (ids.length === 0) {
@@ -456,22 +684,33 @@ export async function bulkReviewVehicleStickerForms(input: {
   if (!input.remark.trim()) {
     throw new Error("Bulk remark is required.");
   }
-
-  if (input.stage === 1) {
-    await requireRole(["SUPERVISOR", "SYSTEM_ADMIN"]);
-  } else if (input.stage === 2) {
-    await requireRole(["HOD", "SYSTEM_ADMIN"]);
-  } else if (input.stage === 3) {
-    await requireRole(["STUDENT_AFFAIRS_HOSTEL_MGMT", "SYSTEM_ADMIN"]);
-  } else {
-    await requireRole(["SECURITY_OFFICE", "SYSTEM_ADMIN"]);
-  }
+  const { user, activeRole, isSystemAdmin } = await assertVehicleStickerBulkStageAccess(input.stage);
 
   const now = new Date();
   const issueDate = now.toISOString().slice(0, 10);
   const validUptoDate = new Date(now);
   validUptoDate.setDate(validUptoDate.getDate() + 365);
-  const validUpto = validUptoDate.toISOString().slice(0, 10);
+  const defaultValidUpto = validUptoDate.toISOString().slice(0, 10);
+  const workflow = await getWorkflow("vehicle-sticker");
+  if (!workflow) {
+    throw new Error("Vehicle Sticker workflow blueprint not found.");
+  }
+  const finalStage = workflow.stages
+    .map((stage) => stage.stage)
+    .sort((a, b) => b - a)[0];
+
+  if (input.decision === "approve" && input.stage === 2) {
+    if (!input.validUpto?.trim()) {
+      throw new Error("Valid upto date is required for stage 2 bulk approval.");
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.validUpto.trim())) {
+      throw new Error("Valid upto date must be in YYYY-MM-DD format.");
+    }
+  }
+
+  if (input.decision === "approve" && input.stage === finalStage && !input.issuedStickerNo?.trim()) {
+    throw new Error("Sticker number is required for final-stage bulk approval.");
+  }
 
   for (let index = 0; index < ids.length; index += 1) {
     const submissionId = ids[index];
@@ -480,55 +719,56 @@ export async function bulkReviewVehicleStickerForms(input: {
       continue;
     }
 
-    if (input.stage === 1 && form.currentStage === 1) {
-      if (input.decision === "approve") {
-        await approveVehicleStickerStage1({ submissionId, approverName: `${input.approverName} | ${input.remark}` });
-      } else {
-        await rejectVehicleStickerStage1({ submissionId, approverName: input.approverName, remark: input.remark });
-      }
+    if (form.currentStage !== input.stage) {
       continue;
     }
 
-    if (input.stage === 2 && form.currentStage === 2) {
-      if (input.decision === "approve") {
-        await approveVehicleStickerStage2({ submissionId, approverName: `${input.approverName} | ${input.remark}` });
-      } else {
-        await rejectVehicleStickerStage2({ submissionId, approverName: input.approverName, remark: input.remark });
-      }
-      continue;
-    }
+    const nextStage = getNextStage(workflow, form.currentStage);
+    const markApproved = nextStage === null;
+    if (input.decision === "approve") {
+      const finalizeStage = await shouldFinalizeVehicleStickerStageApproval({
+        submissionId,
+        stageNumber: form.currentStage,
+        activeRole,
+        isSystemAdmin,
+        workflow,
+        user,
+      });
 
-    if (input.stage === 3 && form.currentStage === 3) {
-      if (input.decision === "approve") {
-        await approveVehicleStickerStage3({
-          submissionId,
-          approverName: input.approverName,
-          residingInHostel: true,
-          recommendationText: input.remark,
-        });
-      } else {
-        await rejectVehicleStickerStage3({ submissionId, approverName: input.approverName, remark: input.remark });
+      if (!finalizeStage) {
+        continue;
       }
-      continue;
-    }
 
-    if (input.stage === 4 && form.currentStage === 4) {
-      if (input.decision === "approve") {
-        await approveVehicleStickerStage4({
-          submissionId,
-          approverName: input.approverName,
-          issuedStickerNo: getVehicleStickerNoForBulk(submissionId, index),
-          validUpto,
-          issueDate,
-        });
-      } else {
-        await rejectVehicleStickerStage4({ submissionId, approverName: input.approverName, remark: input.remark });
-      }
+      await approveVehicleStickerAtStage({
+        submissionId,
+        stageNumber: form.currentStage,
+        nextStage: nextStage ?? form.currentStage,
+        markApproved,
+        recommendationText: `Stage ${form.currentStage}: ${input.approverName} | ${input.remark}`,
+        issuedStickerNo:
+          markApproved && input.issuedStickerNo?.trim()
+            ? getIssuedStickerNoFromBulkInput(input.issuedStickerNo, index, ids.length)
+            : markApproved
+              ? getVehicleStickerNoForBulk(submissionId, index)
+              : undefined,
+        validUpto:
+          form.currentStage === 2
+            ? input.validUpto?.trim()
+            : markApproved
+              ? defaultValidUpto
+              : undefined,
+        issueDate: markApproved ? issueDate : undefined,
+      });
+      await clearStageRoleApprovals(submissionId, form.currentStage);
+    } else {
+      await rejectVehicleStickerAtStage({
+        submissionId,
+        stageNumber: form.currentStage,
+        recommendationText: `Rejected at Stage ${form.currentStage}: ${input.approverName} | ${input.remark}`,
+      });
+      await clearStageRoleApprovals(submissionId, form.currentStage);
     }
   }
 
-  revalidatePath("/dashboard/vehicle-sticker/supervisor");
-  revalidatePath("/dashboard/vehicle-sticker/hod");
-  revalidatePath("/dashboard/vehicle-sticker/student-affairs-hostel-mgmt");
-  revalidatePath("/dashboard/vehicle-sticker/security-office");
+  revalidatePath("/dashboard/vehicle-sticker");
 }

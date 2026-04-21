@@ -1,9 +1,11 @@
 "use client";
 
 import {
+  approveGuestHouseAtCurrentStage,
   approveGuestHouseByApprovingAuthority,
   approveGuestHouseByChairman,
   approveGuestHouseByIncharge,
+  rejectGuestHouseAtCurrentStage,
   rejectGuestHouseByApprovingAuthority,
   rejectGuestHouseByChairman,
   rejectGuestHouseByIncharge,
@@ -33,7 +35,7 @@ export function ApprovingAuthorityPanel({ submissionId }: { submissionId: string
           }
         });
       }}
-      className="space-y-4 rounded-xl border border-amber-200 bg-amber-50 p-5"
+      className="print-hidden space-y-4 rounded-xl border border-amber-200 bg-amber-50 p-5"
     >
       <h3 className="font-semibold text-amber-800">Stage 1 - Competent Authority</h3>
       <div>
@@ -112,7 +114,7 @@ export function InChargePanel({ submissionId }: { submissionId: string }) {
           }
         });
       }}
-      className="space-y-4 rounded-xl border border-blue-200 bg-blue-50 p-5"
+      className="print-hidden space-y-4 rounded-xl border border-blue-200 bg-blue-50 p-5"
     >
       <h3 className="font-semibold text-blue-800">Stage 2 - Guest House In-charge</h3>
       <div>
@@ -212,7 +214,7 @@ export function ChairmanPanel({ submissionId }: { submissionId: string }) {
           }
         });
       }}
-      className="space-y-4 rounded-xl border border-emerald-200 bg-emerald-50 p-5"
+      className="print-hidden space-y-4 rounded-xl border border-emerald-200 bg-emerald-50 p-5"
     >
       <h3 className="font-semibold text-emerald-800">Stage 3 - Chairman GH Committee</h3>
       <div>
@@ -242,6 +244,79 @@ export function ChairmanPanel({ submissionId }: { submissionId: string }) {
               try {
                 setError(null);
                 await rejectGuestHouseByChairman(submissionId, approverName, rejectRemark);
+                router.refresh();
+              } catch (err) {
+                setError((err as Error).message);
+              }
+            })
+          }
+          className="mt-3 w-full rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-60"
+        >
+          {isPending ? "Rejecting..." : "Reject with Remark"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+export function DynamicGuestHouseStagePanel({
+  submissionId,
+  stageNumber,
+}: {
+  submissionId: string;
+  stageNumber: number;
+}) {
+  const [approverName, setApproverName] = useState("");
+  const [remark, setRemark] = useState("");
+  const [rejectRemark, setRejectRemark] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+  const router = useRouter();
+
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        setError(null);
+        startTransition(async () => {
+          try {
+            await approveGuestHouseAtCurrentStage(submissionId, approverName, remark);
+            router.refresh();
+          } catch (err) {
+            setError((err as Error).message);
+          }
+        });
+      }}
+      className="print-hidden space-y-4 rounded-xl border border-slate-300 bg-slate-50 p-5"
+    >
+      <h3 className="font-semibold text-slate-800">Stage {stageNumber} - Standard Review</h3>
+      <div>
+        <label className="label">Approver Name *</label>
+        <input required value={approverName} onChange={(e) => setApproverName(e.target.value)} className="input" />
+      </div>
+      <div>
+        <label className="label">Approval Remark *</label>
+        <textarea required value={remark} onChange={(e) => setRemark(e.target.value)} className="input h-20" />
+      </div>
+      {error ? <p className="text-sm text-red-600">{error}</p> : null}
+      <button
+        disabled={isPending}
+        className="w-full rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+      >
+        {isPending ? "Approving..." : `Approve Stage ${stageNumber}`}
+      </button>
+
+      <div className="border-t border-slate-300 pt-4">
+        <label className="label">Rejection Remark *</label>
+        <textarea value={rejectRemark} onChange={(e) => setRejectRemark(e.target.value)} className="input h-20" />
+        <button
+          type="button"
+          disabled={isPending}
+          onClick={() =>
+            startTransition(async () => {
+              try {
+                setError(null);
+                await rejectGuestHouseAtCurrentStage(submissionId, approverName, rejectRemark);
                 router.refresh();
               } catch (err) {
                 setError((err as Error).message);

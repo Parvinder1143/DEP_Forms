@@ -10,7 +10,14 @@ import {
   setSessionEmail,
 } from "@/lib/auth";
 import type { AppRole } from "@/lib/mock-db";
-import { authenticateUser, updateUserRole } from "@/lib/user-store";
+import { getActiveDelegatedRoleForUser } from "@/lib/delegation-store";
+import {
+  createCustomRole,
+  listCustomRoles,
+  normalizeAssignableRoleCode,
+} from "@/lib/custom-role-store";
+import { BUILT_IN_ROLE_OPTIONS } from "@/lib/roles";
+import { authenticateUser, approvePendingStudentRoleRequests as approvePendingStudentRequests, updateUserRole } from "@/lib/user-store";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -20,6 +27,7 @@ export async function signInWithEmail(formData: FormData) {
   const confirmPassword = String(formData.get("confirmPassword") ?? "");
   const modeRaw = String(formData.get("mode") ?? "login");
   const mode = modeRaw === "signup" ? "signup" : "login";
+  const signupAsStudent = String(formData.get("signupAsStudent") ?? "") === "on";
 
   if (!email) {
     return { error: "Email is required." };
@@ -45,6 +53,7 @@ export async function signInWithEmail(formData: FormData) {
       email,
       password,
       forceSystemAdmin: isSystemAdminEmail(email),
+      signupAsStudent,
       })
     ).user;
   } catch (error) {
@@ -57,11 +66,18 @@ export async function signInWithEmail(formData: FormData) {
     redirect("/admin");
   }
 
+  const delegatedRole = await getActiveDelegatedRoleForUser(user.id);
+  const effectiveRole = delegatedRole ?? user.role;
+
+  if (effectiveRole) {
+    redirect(await getDashboardPathForRole(effectiveRole));
+  }
+
   if (isInstituteEmail(user.email) && !user.role) {
     redirect("/pending-role");
   }
 
-  redirect(getDashboardPathForRole(user.role));
+  redirect(await getDashboardPathForRole(user.role));
 }
 
 export async function signOut() {
@@ -73,31 +89,15 @@ export async function assignRole(formData: FormData) {
   await requireRole(["SYSTEM_ADMIN"]);
 
   const userId = String(formData.get("userId") ?? "");
-  const role = String(formData.get("role") ?? "") as AppRole;
+  const role = normalizeAssignableRoleCode(String(formData.get("role") ?? "")) as AppRole;
 
-  const allowedRoles: AppRole[] = [
-    "STUDENT",
-    "INTERN",
-    "EMPLOYEE",
-    "SUPERVISOR",
-    "SECTION_HEAD",
-    "HOD",
-    "REGISTRAR",
-    "DEAN_FAA",
-    "DIRECTOR",
-    "DEPUTY_DEAN",
-    "STUDENT_AFFAIRS_HOSTEL_MGMT",
-    "SECURITY_OFFICE",
-    "FORWARDING_AUTHORITY_ACADEMICS",
-    "ESTABLISHMENT",
-    "FORWARDING_AUTHORITY_R_AND_D",
-    "GUEST_HOUSE_INCHARGE",
-    "GUEST_HOUSE_COMMITTEE_CHAIR",
-    "IT_ADMIN",
-    "SYSTEM_ADMIN",
-  ];
+  const customRoles = await listCustomRoles();
+  const allowedRoles = new Set<string>([
+    ...BUILT_IN_ROLE_OPTIONS,
+    ...customRoles.map((customRole) => customRole.roleCode),
+  ]);
 
-  if (!allowedRoles.includes(role)) {
+  if (!allowedRoles.has(role)) {
     throw new Error("Invalid role selected.");
   }
 
@@ -106,4 +106,32 @@ export async function assignRole(formData: FormData) {
   revalidatePath("/admin");
   revalidatePath("/pending-role");
   revalidatePath("/");
+}
+
+export async function createAssignableRole(formData: FormData) {
+  await requireRole(["SYSTEM_ADMIN"]);
+
+  const roleCode = String(formData.get("roleCode") ?? "");
+  const displayName = String(formData.get("displayName") ?? "");
+
+  await createCustomRole({ roleCode, displayName });
+
+  revalidatePath("/admin");
+}
+
+export async function approveAllStudentRoleRequests(formData: FormData) {
+  await requireRole(["SYSTEM_ADMIN"]);
+
+  const shouldApprove = String(formData.get("approveAllStudentRequests") ?? "") === "on";
+  if (!shouldApprove) {
+    return { error: "Select the checkbox to confirm bulk student approval." };
+  }
+
+  await approvePendingStudentRequests();
+
+  revalidatePath("/admin");
+  revalidatePath("/pending-role");
+  revalidatePath("/");
+
+  return { success: true };
 }

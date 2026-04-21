@@ -3,6 +3,8 @@ import { submitHostelUndertakingForm } from "@/app/actions/hostel-undertaking";
 
 export default async function HostelUndertakingFormPage() {
   const user = await requireApplicantFormAccess("hostel-undertaking");
+  const today = new Date();
+  const todayDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-10">
@@ -54,7 +56,14 @@ export default async function HostelUndertakingFormPage() {
               </div>
               <div>
                 <label className="label">Declaration Date *</label>
-                <input name="declarationDate" type="date" required className="input" />
+                <input type="hidden" name="declarationDate" value={todayDate} />
+                <input
+                  type="date"
+                  className="input bg-slate-100 text-slate-600"
+                  value={todayDate}
+                  readOnly
+                  disabled
+                />
               </div>
               <div>
                 <label className="label">Blood Group *</label>
@@ -101,18 +110,17 @@ export default async function HostelUndertakingFormPage() {
                 <input name="parentRelationship" required className="input" placeholder="Father / Mother / Guardian" />
               </div>
               <div>
-                <label className="label">Office Address Line 1 *</label>
-                <input name="parentOfficeAddressLine1" required className="input" />
+                <label className="label">Office Address Line 1</label>
+                <input name="parentOfficeAddressLine1" className="input" />
               </div>
               <div>
                 <label className="label">Office Address Line 2</label>
                 <input name="parentOfficeAddressLine2" className="input" />
               </div>
               <div>
-                <label className="label">Office Mobile *</label>
+                <label className="label">Office Mobile</label>
                 <input
                   name="parentOfficeMobile"
-                  required
                   pattern="[0-9]{10}"
                   inputMode="numeric"
                   maxLength={10}
@@ -137,8 +145,16 @@ export default async function HostelUndertakingFormPage() {
                 <input name="parentResidenceAddressLine2" className="input" />
               </div>
               <div>
-                <label className="label">Residence Mobile</label>
-                <input name="parentResidenceMobile" className="input" />
+                <label className="label">Residence Mobile *</label>
+                <input
+                  name="parentResidenceMobile"
+                  required
+                  pattern="[0-9]{10}"
+                  inputMode="numeric"
+                  maxLength={10}
+                  className="input"
+                  placeholder="10-digit mobile number"
+                />
               </div>
               <div>
                 <label className="label">Residence Telephone</label>
@@ -219,6 +235,26 @@ export default async function HostelUndertakingFormPage() {
                 />
               </div>
             </div>
+          </section>
+
+          <section className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-700">Undertaking</h2>
+            <p className="text-sm leading-6 text-slate-700">
+              I, the undersigned, hereby declare that I have read the hostel rules of IIT Ropar and I have been also informed
+              about the anti-ragging policy and prohibitions in the hostel premises. I promise to abide by the rules and
+              regulations of this Institute, amended and enforced from time to time. I will not violate any information
+              Technology (IT) rules and will not misuse the internet, email and any institute facilities. I am aware that the
+              hostel / Institute administration has the right to terminate my accommodation in the hostel at their discretion.
+            </p>
+            <label className="flex items-start gap-3 text-sm text-slate-800">
+              <input
+                name="undertakingAccepted"
+                type="checkbox"
+                required
+                className="mt-1 h-4 w-4 rounded border-slate-300"
+              />
+              <span>I have read and agree to the above undertaking.</span>
+            </label>
           </section>
 
           <button

@@ -6,13 +6,19 @@ import {
 import { requireUser } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
 
+import { PrintButton } from "@/components/ui/print-button";
+
 export default async function GuestHouseStatusPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ embed?: string }>;
 }) {
   const user = await requireUser();
   const { id } = await params;
+  const { embed } = await searchParams;
+  const isEmbedMode = embed === "1" || embed === "true";
 
   const form = await getGuestHouseFormById(id);
   if (!form) notFound();
@@ -34,12 +40,20 @@ export default async function GuestHouseStatusPage({
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-10">
+      {isEmbedMode ? (
+        <style>{`.print-hidden{display:none!important;}.app-content{padding-top:0!important;}`}</style>
+      ) : null}
       <div className="mx-auto max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <p className="text-xs font-semibold uppercase tracking-widest text-indigo-600">
-          Guest House Reservation
-        </p>
-        <h1 className="mt-1 text-2xl font-bold text-slate-900">Submission Status</h1>
-        <p className="mt-1 text-sm text-slate-500">Reference ID: {form.submissionId}</p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-indigo-600">
+              Guest House Reservation
+            </p>
+            <h1 className="mt-1 text-2xl font-bold text-slate-900">Submission Status</h1>
+            <p className="mt-1 text-sm text-slate-500">Reference ID: {form.submissionId}</p>
+          </div>
+          {!isEmbedMode ? <PrintButton /> : null}
+        </div>
 
         <div
           className={`mt-5 rounded-lg px-4 py-3 text-sm font-semibold ${getGuestHouseStatusBadgeClass(

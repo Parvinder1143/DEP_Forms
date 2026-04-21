@@ -30,7 +30,7 @@ export default async function EmailIdFormPage() {
             </p>
           )}
           <div className="mt-5">
-            <Link
+            <Link prefetch={false}
               href={latestIssued ? `/forms/email-id/${latestIssued.id}` : "/"}
               className="rounded-lg bg-green-700 px-4 py-2 text-sm font-semibold text-white hover:bg-green-800"
             >

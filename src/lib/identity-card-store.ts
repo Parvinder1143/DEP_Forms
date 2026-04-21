@@ -401,8 +401,8 @@ export async function createIdentityCardForm(input: {
 
     const stageRows = [
       [1, "HoD / Section Head Forwarding", "hod"],
-      [2, "Establishment / Deputy Registrar Review", "deputy_registrar"],
-      [3, "Registrar / Dean FA&A Final Approval", "registrar"],
+      [2, "Establishment Review", "deputy_registrar"],
+      [3, "Registrar / Dean Final Approval", "registrar"],
     ] as const;
 
     for (const stage of stageRows) {
@@ -567,15 +567,63 @@ async function listByWhere(whereClause: string, values: unknown[] = []) {
   return combineRecords(result.rows, approvalsMap, attachmentsMap);
 }
 
-export async function listIdentityCardFormsForStage(stageNumber: number) {
-  return listByWhere(
-    "AND fs.current_stage = $1 AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)",
-    [stageNumber]
-  );
+import { getNextStage, getWorkflow, getStagesForRole } from "@/lib/workflow-engine";
+
+export async function listActionableIdentityCardForms(activeRole: AppRole, department?: string | null) {
+  const workflow = await getWorkflow("identity-card");
+  if (!workflow) return [];
+
+  const validStages = getStagesForRole(workflow, activeRole);
+  if (validStages.length === 0) return [];
+
+  // Transform [1, 2] into dynamically bound parameters
+  const placeholders = validStages.map((_, i) => `$${i + 1}`).join(", ");
+  let whereClause = `AND fs.current_stage IN (${placeholders}) AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)`;
+  
+  const params: unknown[] = [...validStages];
+
+  if (department) {
+    params.push(department);
+    whereClause += ` AND icd.department_snapshot = $${params.length}`;
+  }
+
+  return listByWhere(whereClause, params);
 }
 
-export async function listIdentityCardCompletedForms() {
-  return listByWhere("AND fs.overall_status IN ('approved'::submission_status, 'rejected'::submission_status)");
+export async function listIdentityCardFormsForStage(stageNumber: number, department?: string | null) {
+  let whereClause = "AND fs.current_stage = $1 AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)";
+  const params: unknown[] = [stageNumber];
+
+  if (department) {
+    params.push(department);
+    whereClause += ` AND icd.department_snapshot = $${params.length}`;
+  }
+
+  return listByWhere(whereClause, params);
+}
+
+export async function listIdentityCardCompletedForms(department?: string | null) {
+  let whereClause = "AND fs.overall_status IN ('approved'::submission_status, 'rejected'::submission_status)";
+  const params: unknown[] = [];
+
+  if (department) {
+    params.push(department);
+    whereClause += ` AND icd.department_snapshot = $${params.length}`;
+  }
+
+  return listByWhere(whereClause, params);
+}
+
+export async function listIdentityCardOngoingForms(department?: string | null) {
+  let whereClause = "AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)";
+  const params: unknown[] = [];
+
+  if (department) {
+    params.push(department);
+    whereClause += ` AND icd.department_snapshot = $${params.length}`;
+  }
+
+  return listByWhere(whereClause, params);
 }
 
 export async function listIdentityCardFormsBySubmitterEmail(email: string) {
@@ -808,11 +856,18 @@ export async function approveIdentityCardStage1(input: {
   approverName: string;
   approverRoleLabel: string;
 }) {
+  const workflow = await getWorkflow("identity-card");
+  if (!workflow) {
+    throw new Error("Identity Card workflow blueprint not found in database.");
+  }
+
+  const nextStage = getNextStage(workflow, 1);
+
   return approveStage({
     submissionId: input.submissionId,
     stageNumber: 1,
-    nextStage: 2,
-    markApproved: false,
+    nextStage: nextStage ?? 1,
+    markApproved: nextStage === null,
     actorName: input.approverName,
     recommendationText: `${input.approverRoleLabel}: ${input.approverName}`,
   });
@@ -823,13 +878,20 @@ export async function approveIdentityCardStage2(input: {
   approverName: string;
   approverWorkflowUserId: string;
 }) {
+  const workflow = await getWorkflow("identity-card");
+  if (!workflow) {
+    throw new Error("Identity Card workflow blueprint not found in database.");
+  }
+
+  const nextStage = getNextStage(workflow, 2);
+
   return approveStage({
     submissionId: input.submissionId,
     stageNumber: 2,
-    nextStage: 3,
-    markApproved: false,
+    nextStage: nextStage ?? 2,
+    markApproved: nextStage === null,
     actorUserId: input.approverWorkflowUserId,
-    recommendationText: `Deputy Registrar: ${input.approverName} | Recommended`,
+    recommendationText: `Establishment: ${input.approverName} | Recommended`,
   });
 }
 
@@ -839,11 +901,18 @@ export async function approveIdentityCardStage3(input: {
   approverRoleLabel: string;
   approverWorkflowUserId: string;
 }) {
+  const workflow = await getWorkflow("identity-card");
+  if (!workflow) {
+    throw new Error("Identity Card workflow blueprint not found in database.");
+  }
+
+  const nextStage = getNextStage(workflow, 3);
+
   return approveStage({
     submissionId: input.submissionId,
     stageNumber: 3,
-    nextStage: 3,
-    markApproved: true,
+    nextStage: nextStage ?? 3,
+    markApproved: nextStage === null,
     actorUserId: input.approverWorkflowUserId,
     recommendationText: `${input.approverRoleLabel}: ${input.approverName} | Approved`,
   });
@@ -851,7 +920,7 @@ export async function approveIdentityCardStage3(input: {
 
 export async function rejectIdentityCardStage(input: {
   submissionId: string;
-  stageNumber: 1 | 2 | 3;
+  stageNumber: number;
   approverName: string;
   approverRoleLabel: string;
   remark: string;
@@ -862,6 +931,40 @@ export async function rejectIdentityCardStage(input: {
     stageNumber: input.stageNumber,
     actorUserId: input.approverWorkflowUserId,
     recommendationText: `Rejected by ${input.approverRoleLabel}: ${input.approverName} | ${input.remark}`,
+  });
+}
+
+export async function approveIdentityCardAtStage(input: {
+  submissionId: string;
+  stageNumber: number;
+  nextStage: number;
+  markApproved: boolean;
+  recommendationText: string;
+  approverWorkflowUserId?: string;
+  approverName?: string;
+}) {
+  return approveStage({
+    submissionId: input.submissionId,
+    stageNumber: input.stageNumber,
+    nextStage: input.nextStage,
+    markApproved: input.markApproved,
+    recommendationText: input.recommendationText,
+    actorUserId: input.approverWorkflowUserId,
+    actorName: input.approverName,
+  });
+}
+
+export async function rejectIdentityCardAtStage(input: {
+  submissionId: string;
+  stageNumber: number;
+  recommendationText: string;
+  approverWorkflowUserId?: string;
+}) {
+  return rejectStage({
+    submissionId: input.submissionId,
+    stageNumber: input.stageNumber,
+    recommendationText: input.recommendationText,
+    actorUserId: input.approverWorkflowUserId,
   });
 }
 

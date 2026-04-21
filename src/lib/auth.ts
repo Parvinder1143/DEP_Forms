@@ -1,6 +1,12 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { findUserByEmail } from "@/lib/user-store";
+import {
+  getActiveDelegationForUser,
+  hasActiveOutgoingDelegationForRole,
+} from "@/lib/delegation-store";
+import { getStagesForRole, getWorkflow } from "@/lib/workflow-engine";
+import { getRoleLabel } from "@/lib/roles";
 import type { AppRole } from "@/lib/mock-db";
 
 export const SESSION_COOKIE = "iitrpr_session_email";
@@ -134,104 +140,102 @@ export async function requireAssignedUser() {
 
 export async function requireRole(roles: AppRole[]) {
   const user = await requireUser();
-  if (!user.role || !roles.includes(user.role)) {
-    redirect("/");
+  const delegation = await getActiveDelegationForUser(user.id, roles);
+  if (delegation) {
+    return {
+      ...user,
+      role: delegation.delegatedRole,
+      department: delegation.requesterDepartment ?? user.department,
+      baseRole: user.role,
+      isTemporarilyAssigned: true,
+    };
   }
-  return user;
+
+  if (user.role && roles.includes(user.role)) {
+    const delegatedAway = await hasActiveOutgoingDelegationForRole(user.id, user.role);
+    if (delegatedAway) {
+      redirect("/dashboard/delegation");
+    }
+    return {
+      ...user,
+      baseRole: user.role,
+      isTemporarilyAssigned: false,
+    };
+  }
+
+  redirect("/");
+}
+
+export function getRoleDisplayContext(input: {
+  role: AppRole | null;
+  baseRole?: AppRole | null;
+  isTemporarilyAssigned?: boolean;
+}) {
+  const activeRoleLabel = toDisplayRole(input.role);
+  const baseRole = input.baseRole ?? input.role;
+  const baseRoleLabel = toDisplayRole(baseRole ?? null);
+  const isTemporarilyAssigned = Boolean(
+    input.isTemporarilyAssigned && input.role && baseRole && input.role !== baseRole
+  );
+
+  return {
+    activeRoleLabel,
+    baseRoleLabel,
+    isTemporarilyAssigned,
+  };
 }
 
 export function isSystemAdminEmail(email: string) {
   return SYSTEM_ADMIN_EMAILS.includes(normalizeEmail(email));
 }
 
-export function getDashboardPathForRole(role: AppRole | null) {
-  switch (role) {
-    case "HOSTEL_WARDEN":
-      return "/dashboard/hostel-undertaking/warden";
-    case "SUPERVISOR":
-      return "/dashboard/vehicle-sticker/supervisor";
-    case "SECTION_HEAD":
-      return "/dashboard/identity-card/hod-section-head";
-    case "HOD":
-      return "/dashboard/vehicle-sticker/hod";
-    case "REGISTRAR":
-      return "/dashboard/identity-card/registrar";
-    case "DEAN_FAA":
-      return "/dashboard/identity-card/dean-faa";
-    case "DIRECTOR":
-    case "DEPUTY_DEAN":
-      return "/dashboard/guest-house/approving-authority";
-    case "STUDENT_AFFAIRS_HOSTEL_MGMT":
-      return "/dashboard/vehicle-sticker/student-affairs-hostel-mgmt";
-    case "SECURITY_OFFICE":
-      return "/dashboard/vehicle-sticker/security-office";
-    case "FORWARDING_AUTHORITY_ACADEMICS":
-      return "/dashboard/email-id/academics";
-    case "ESTABLISHMENT":
-      return "/dashboard/email-id/establishment";
-    case "FORWARDING_AUTHORITY_R_AND_D":
-      return "/dashboard/email-id/rnd";
-    case "APPROVING_AUTHORITY":
-      return "/dashboard/guest-house/approving-authority";
-    case "GUEST_HOUSE_INCHARGE":
-      return "/dashboard/guest-house/in-charge";
-    case "GUEST_HOUSE_COMMITTEE_CHAIR":
-      return "/dashboard/guest-house/chairman";
-    case "IT_ADMIN":
-    case "SYSTEM_ADMIN":
-      return "/dashboard/email-id";
-    default:
-      return "/";
+export async function getDashboardPathForRole(role: AppRole | null) {
+  if (!role || role === "SYSTEM_ADMIN") return "/";
+
+  const dashboardToWorkflow: Array<{ path: string; workflowId: string }> = [
+    { path: "/dashboard/email-id", workflowId: "email-id" },
+    { path: "/dashboard/vehicle-sticker", workflowId: "vehicle-sticker" },
+    { path: "/dashboard/identity-card", workflowId: "identity-card" },
+    { path: "/dashboard/guest-house", workflowId: "guest-house" },
+    { path: "/dashboard/hostel-undertaking", workflowId: "hostel-undertaking" },
+  ];
+
+  for (const item of dashboardToWorkflow) {
+    const workflow = await getWorkflow(item.workflowId);
+    if (workflow && getStagesForRole(workflow, role).length > 0) {
+      return item.path;
+    }
   }
+
+  return "/";
+}
+
+export async function getDashboardQueueLinksForRole(role: AppRole | null): Promise<Array<{ path: string; label: string }>> {
+  if (!role || role === "SYSTEM_ADMIN") return [];
+
+  const dashboardToWorkflow: Array<{ path: string; label: string; workflowId: string }> = [
+    { path: "/dashboard/email-id", label: "Email Queue", workflowId: "email-id" },
+    { path: "/dashboard/vehicle-sticker", label: "Vehicle Queue", workflowId: "vehicle-sticker" },
+    { path: "/dashboard/identity-card", label: "ID Card Queue", workflowId: "identity-card" },
+    { path: "/dashboard/guest-house", label: "Guest House Queue", workflowId: "guest-house" },
+    { path: "/dashboard/hostel-undertaking", label: "Undertaking Queue", workflowId: "hostel-undertaking" },
+  ];
+
+  const links: Array<{ path: string; label: string }> = [];
+  for (const item of dashboardToWorkflow) {
+    const workflow = await getWorkflow(item.workflowId);
+    if (workflow && getStagesForRole(workflow, role).length > 0) {
+      links.push({ path: item.path, label: item.label });
+    }
+  }
+
+  if (links.length > 0) {
+    return links;
+  }
+
+  return [];
 }
 
 export function toDisplayRole(role: AppRole | null) {
-  if (!role) return "Unassigned";
-
-  switch (role) {
-    case "STUDENT":
-      return "Student";
-    case "INTERN":
-      return "Intern";
-    case "EMPLOYEE":
-      return "Employee";
-    case "HOSTEL_WARDEN":
-      return "Hostel Warden";
-    case "SUPERVISOR":
-      return "Supervisor";
-    case "SECTION_HEAD":
-      return "Section Head";
-    case "HOD":
-      return "HoD";
-    case "REGISTRAR":
-      return "Registrar";
-    case "DEAN_FAA":
-      return "Dean FA&A";
-    case "DIRECTOR":
-      return "Director";
-    case "DEPUTY_DEAN":
-      return "Deputy Dean";
-    case "STUDENT_AFFAIRS_HOSTEL_MGMT":
-      return "Student Affairs";
-    case "SECURITY_OFFICE":
-      return "Security Office";
-    case "FORWARDING_AUTHORITY_ACADEMICS":
-      return "Forwarding Authority (Academics)";
-    case "ESTABLISHMENT":
-      return "Establishment";
-    case "FORWARDING_AUTHORITY_R_AND_D":
-      return "Forwarding Authority (R&D)";
-    case "APPROVING_AUTHORITY":
-      return "Approving Authority";
-    case "GUEST_HOUSE_INCHARGE":
-      return "Guest House In-charge";
-    case "GUEST_HOUSE_COMMITTEE_CHAIR":
-      return "Chairman GH Committee";
-    case "IT_ADMIN":
-      return "IT Admin";
-    case "SYSTEM_ADMIN":
-      return "System Admin";
-    default:
-      return role;
-  }
+  return getRoleLabel(role);
 }

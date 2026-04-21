@@ -14,9 +14,13 @@ const SECTION_OPTIONS: { value: ForwardingSection; label: string }[] = [
 
 export function ForwardingAuthorityPanel({
   formId,
+  stageNumber,
+  stageLabel,
   fixedSection,
 }: {
   formId: string;
+  stageNumber: number;
+  stageLabel: string;
   fixedSection?: ForwardingSection;
 }) {
   const [section, setSection] = useState<ForwardingSection>(
@@ -43,10 +47,10 @@ export function ForwardingAuthorityPanel({
   return (
     <form
       onSubmit={handleSubmit}
-      className="space-y-4 rounded-xl border border-amber-200 bg-amber-50 p-5"
+      className="print-hidden space-y-4 rounded-xl border border-amber-200 bg-amber-50 p-5"
     >
       <h3 className="font-semibold text-amber-800">
-        Stage 1 — Forwarding Authority
+        Stage {stageNumber} — {stageLabel}
       </h3>
       <p className="text-sm text-amber-700">
         Review and sign off on this request to forward it to IT Admin.
@@ -114,7 +118,15 @@ export function ForwardingAuthorityPanel({
 
 // ── Stage 2 Panel ────────────────────────────────────────────────────────────
 
-export function ITAdminPanel({ formId }: { formId: string }) {
+export function ITAdminPanel({
+  formId,
+  stageNumber,
+  stageLabel,
+}: {
+  formId: string;
+  stageNumber: number;
+  stageLabel: string;
+}) {
   const [assignedEmail, setAssignedEmail] = useState("");
   const [dateOfCreation, setDateOfCreation] = useState("");
   const [tentativeRemovalDate, setTentativeRemovalDate] = useState("");
@@ -145,9 +157,10 @@ export function ITAdminPanel({ formId }: { formId: string }) {
   return (
     <form
       onSubmit={handleSubmit}
-      className="space-y-4 rounded-xl border border-green-200 bg-green-50 p-5"
+      className="print-hidden space-y-4 rounded-xl border border-green-200 bg-green-50 p-5"
     >
       <h3 className="font-semibold text-green-800">Stage 2 — IT Admin Approval</h3>
+      <p className="text-xs font-medium uppercase tracking-wide text-green-700">Stage {stageNumber}: {stageLabel}</p>
       <p className="text-sm text-green-700">
         Email ID creation approved by (with date).
       </p>

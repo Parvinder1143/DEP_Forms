@@ -493,10 +493,30 @@ export async function createVehicleStickerForm(input: {
   }
 }
 
-export async function listVehicleStickerFormsForStage(stageNumber: number) {
+import { getNextStage, getWorkflow, getStagesForRole } from "@/lib/workflow-engine";
+
+export async function listActionableVehicleStickerForms(activeRole: AppRole, department?: string | null) {
   const pool = getPgPool();
-  if (!pool) {
-    return [] as VehicleStickerFormRecord[];
+  if (!pool) return [];
+
+  const workflow = await getWorkflow("vehicle-sticker");
+  if (!workflow) return [];
+
+  const validStages = getStagesForRole(workflow, activeRole);
+  if (validStages.length === 0) return [];
+
+  const placeholders = validStages.map((_, i) => `$${i + 1}`).join(", ");
+  const params: unknown[] = [...validStages];
+
+  let whereClause = `
+    WHERE fs.form_type = 'vehicle_sticker'::form_type
+      AND fs.current_stage IN (${placeholders})
+      AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)
+  `;
+
+  if (department) {
+    params.push(department);
+    whereClause += ` AND fs.metadata->>'department' = $${params.length}`;
   }
 
   const result = await pool.query(
@@ -524,12 +544,65 @@ export async function listVehicleStickerFormsForStage(stageNumber: number) {
     FROM form_submissions fs
     JOIN users u ON u.id = fs.submitted_by
     JOIN vehicle_sticker_data vsd ON vsd.submission_id = fs.id
+    ${whereClause}
+    ORDER BY fs.created_at DESC
+  `,
+    params
+  );
+
+  const ids = result.rows.map((r) => String(r.submission_id));
+  const approvalsMap = await getApprovalsBySubmissionIds(ids);
+  const detailsMap = await getVehicleDetailsBySubmissionIds(ids);
+  return combineRecords(result.rows, approvalsMap, detailsMap);
+}
+
+export async function listVehicleStickerFormsForStage(stageNumber: number, department?: string | null) {
+  const pool = getPgPool();
+  if (!pool) {
+    return [] as VehicleStickerFormRecord[];
+  }
+
+  const params: unknown[] = [stageNumber];
+  let whereClause = `
     WHERE fs.form_type = 'vehicle_sticker'::form_type
       AND fs.current_stage = $1
       AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)
+  `;
+
+  if (department) {
+    params.push(department);
+    whereClause += ` AND fs.metadata->>'department' = $${params.length}`;
+  }
+
+  const result = await pool.query(
+    `
+    SELECT
+      fs.id AS submission_id,
+      fs.submitted_by,
+      fs.current_stage,
+      fs.overall_status,
+      fs.metadata,
+      fs.created_at,
+      fs.updated_at,
+      u.email AS submitted_by_email,
+      vsd.entry_or_emp_no,
+      vsd.address,
+      vsd.phone,
+      vsd.email_contact,
+      vsd.driving_license_no,
+      vsd.dl_valid_upto,
+      vsd.declaration_date,
+      vsd.residing_in_hostel,
+      vsd.issued_sticker_no,
+      vsd.sticker_valid_upto,
+      vsd.security_issue_date
+    FROM form_submissions fs
+    JOIN users u ON u.id = fs.submitted_by
+    JOIN vehicle_sticker_data vsd ON vsd.submission_id = fs.id
+    ${whereClause}
     ORDER BY fs.created_at DESC
   `,
-    [stageNumber]
+    params
   );
 
   const ids = result.rows.map((r) => String(r.submission_id));
@@ -578,13 +651,25 @@ export async function listVehicleStickerFormsForAdmin() {
   return combineRecords(result.rows, approvalsMap, detailsMap);
 }
 
-export async function listVehicleStickerOngoingForms() {
+export async function listVehicleStickerOngoingForms(department?: string | null) {
   const pool = getPgPool();
   if (!pool) {
     return [] as VehicleStickerFormRecord[];
   }
 
-  const result = await pool.query(`
+  const params: unknown[] = [];
+  let whereClause = `
+    WHERE fs.form_type = 'vehicle_sticker'::form_type
+      AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)
+  `;
+
+  if (department) {
+    params.push(department);
+    whereClause += ` AND fs.metadata->>'department' = $${params.length}`;
+  }
+
+  const result = await pool.query(
+    `
     SELECT
       fs.id AS submission_id,
       fs.submitted_by,
@@ -608,10 +693,11 @@ export async function listVehicleStickerOngoingForms() {
     FROM form_submissions fs
     JOIN users u ON u.id = fs.submitted_by
     JOIN vehicle_sticker_data vsd ON vsd.submission_id = fs.id
-    WHERE fs.form_type = 'vehicle_sticker'::form_type
-      AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)
+    ${whereClause}
     ORDER BY fs.created_at DESC
-  `);
+  `,
+    params
+  );
 
   const ids = result.rows.map((r) => String(r.submission_id));
   const approvalsMap = await getApprovalsBySubmissionIds(ids);
@@ -619,13 +705,25 @@ export async function listVehicleStickerOngoingForms() {
   return combineRecords(result.rows, approvalsMap, detailsMap);
 }
 
-export async function listVehicleStickerCompletedForms() {
+export async function listVehicleStickerCompletedForms(department?: string | null) {
   const pool = getPgPool();
   if (!pool) {
     return [] as VehicleStickerFormRecord[];
   }
 
-  const result = await pool.query(`
+  const params: unknown[] = [];
+  let whereClause = `
+    WHERE fs.form_type = 'vehicle_sticker'::form_type
+      AND fs.overall_status = 'approved'::submission_status
+  `;
+
+  if (department) {
+    params.push(department);
+    whereClause += ` AND fs.metadata->>'department' = $${params.length}`;
+  }
+
+  const result = await pool.query(
+    `
     SELECT
       fs.id AS submission_id,
       fs.submitted_by,
@@ -649,10 +747,11 @@ export async function listVehicleStickerCompletedForms() {
     FROM form_submissions fs
     JOIN users u ON u.id = fs.submitted_by
     JOIN vehicle_sticker_data vsd ON vsd.submission_id = fs.id
-    WHERE fs.form_type = 'vehicle_sticker'::form_type
-      AND fs.overall_status = 'approved'::submission_status
+    ${whereClause}
     ORDER BY fs.created_at DESC
-  `);
+  `,
+    params
+  );
 
   const ids = result.rows.map((r) => String(r.submission_id));
   const approvalsMap = await getApprovalsBySubmissionIds(ids);
@@ -1060,11 +1159,17 @@ export async function approveVehicleStickerStage1(input: {
   submissionId: string;
   approverName: string;
 }) {
+  const workflow = await getWorkflow("vehicle-sticker");
+  if (!workflow) {
+    throw new Error("Vehicle Sticker workflow blueprint not found in database.");
+  }
+  const nextStage = getNextStage(workflow, 1);
+
   return approveStage({
     submissionId: input.submissionId,
     stageNumber: 1,
-    nextStage: 2,
-    markApproved: false,
+    nextStage: nextStage ?? 1,
+    markApproved: nextStage === null,
     recommendationText: `Supervisor: ${input.approverName}`,
   });
 }
@@ -1072,14 +1177,35 @@ export async function approveVehicleStickerStage1(input: {
 export async function approveVehicleStickerStage2(input: {
   submissionId: string;
   approverName: string;
+  validUpto: string;
 }) {
-  return approveStage({
+  const pool = getPgPool();
+  if (!pool) {
+    throw new Error("Database is not configured.");
+  }
+
+  const workflow = await getWorkflow("vehicle-sticker");
+  if (!workflow) {
+    throw new Error("Vehicle Sticker workflow blueprint not found in database.");
+  }
+  const nextStage = getNextStage(workflow, 2);
+
+  await approveStage({
     submissionId: input.submissionId,
     stageNumber: 2,
-    nextStage: 3,
-    markApproved: false,
+    nextStage: nextStage ?? 2,
+    markApproved: nextStage === null,
     recommendationText: `HoD: ${input.approverName}`,
   });
+
+  await pool.query(
+    `
+    UPDATE vehicle_sticker_data
+    SET sticker_valid_upto = $2::date
+    WHERE submission_id = $1::uuid
+  `,
+    [input.submissionId, input.validUpto]
+  );
 }
 
 export async function approveVehicleStickerStage3(input: {
@@ -1093,11 +1219,17 @@ export async function approveVehicleStickerStage3(input: {
     throw new Error("Database is not configured.");
   }
 
+  const workflow = await getWorkflow("vehicle-sticker");
+  if (!workflow) {
+    throw new Error("Vehicle Sticker workflow blueprint not found in database.");
+  }
+  const nextStage = getNextStage(workflow, 3);
+
   await approveStage({
     submissionId: input.submissionId,
     stageNumber: 3,
-    nextStage: 4,
-    markApproved: false,
+    nextStage: nextStage ?? 3,
+    markApproved: nextStage === null,
     recommendationText: `StudentAffairs/Hostel: ${input.approverName} | ${input.recommendationText}`,
   });
 
@@ -1190,5 +1322,67 @@ export async function rejectVehicleStickerStage4(input: {
     submissionId: input.submissionId,
     stageNumber: 4,
     recommendationText: `Rejected by Security Office: ${input.approverName} | ${input.remark}`,
+  });
+}
+
+export async function approveVehicleStickerAtStage(input: {
+  submissionId: string;
+  stageNumber: number;
+  nextStage: number;
+  markApproved: boolean;
+  recommendationText: string;
+  issuedStickerNo?: string;
+  validUpto?: string;
+  issueDate?: string;
+}) {
+  const pool = getPgPool();
+  if (!pool) {
+    throw new Error("Database is not configured.");
+  }
+
+  await approveStage({
+    submissionId: input.submissionId,
+    stageNumber: input.stageNumber,
+    nextStage: input.nextStage,
+    markApproved: input.markApproved,
+    recommendationText: input.recommendationText,
+  });
+
+  if (input.validUpto) {
+    await pool.query(
+      `
+      UPDATE vehicle_sticker_data
+      SET sticker_valid_upto = $2::date
+      WHERE submission_id = $1::uuid
+    `,
+      [input.submissionId, input.validUpto]
+    );
+  }
+
+  // If this approval issues the sticker (typically final Security stage), persist issuance metadata.
+  if (input.markApproved && input.issuedStickerNo && input.validUpto && input.issueDate) {
+    await pool.query(
+      `
+      UPDATE vehicle_sticker_data
+      SET issued_sticker_no = $2,
+          sticker_valid_upto = $3::date,
+          security_issue_date = $4::date,
+          security_issued_at = NOW()
+      WHERE submission_id = $1::uuid
+    `,
+      [input.submissionId, input.issuedStickerNo, input.validUpto, input.issueDate]
+    );
+  }
+}
+
+export async function rejectVehicleStickerAtStage(input: {
+  submissionId: string;
+  stageNumber: number;
+  recommendationText: string;
+}) {
+  return rejectStage({
+    submissionId: input.submissionId,
+    stageNumber: input.stageNumber,
+    recommendationText: input.recommendationText,
   });
 }

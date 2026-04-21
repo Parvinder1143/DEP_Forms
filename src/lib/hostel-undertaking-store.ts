@@ -2,6 +2,7 @@ import { getPgPool } from "@/lib/db";
 import type { AppRole } from "@/lib/mock-db";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { getNextStage, getWorkflow } from "@/lib/workflow-engine";
 
 export type HostelUndertakingStageApproval = {
   stageNumber: number;
@@ -701,14 +702,82 @@ export async function listHostelUndertakingFormsForStage(stageNumber: number) {
   );
 }
 
+export async function listActionableHostelUndertakingForms(userRole: string) {
+  const pool = getPgPool();
+  if (!pool) {
+    return [] as HostelUndertakingFormRecord[];
+  }
+
+  // Find user stages mathematically via JSON blueprint mapping mapping to current_stage
+  const result = await pool.query(
+    `
+    WITH user_stages AS (
+      SELECT workflow.stage_element->>'stage' AS stage_num
+      FROM app_workflows w,
+           jsonb_array_elements(w.stages) AS workflow(stage_element)
+      WHERE w.id = 'hostel-undertaking'
+        AND string_to_array(workflow.stage_element->>'role', ',') @> ARRAY[$1]::text[]
+    )
+    SELECT
+      fs.id AS submission_id,
+      fs.submitted_by,
+      fs.current_stage,
+      fs.overall_status,
+      fs.metadata,
+      fs.created_at,
+      fs.updated_at,
+      u.email AS submitted_by_email,
+      hud.course_name,
+      hud.department,
+      hud.hostel_room_no,
+      hud.email_address,
+      hud.date_of_joining,
+      hud.hef_amount,
+      hud.mess_security,
+      hud.mess_admission_fee,
+      hud.mess_charges,
+      hud.blood_group,
+      hud.category,
+      hud.emergency_contact_no,
+      hud.declaration_date,
+      hud.undertaking_accepted_at
+    FROM form_submissions fs
+    JOIN users u ON u.id = fs.submitted_by
+    JOIN hostel_undertaking_data hud ON hud.submission_id = fs.id
+    WHERE fs.form_type = 'hostel_undertaking'::form_type
+      AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)
+      AND fs.current_stage::text IN (SELECT stage_num FROM user_stages)
+    ORDER BY fs.created_at ASC
+  `,
+    [userRole]
+  );
+
+  const ids = result.rows.map((row) => String(row.submission_id));
+  const approvalsMap = await getApprovalsBySubmissionIds(ids);
+  const guardiansMap = await getGuardiansBySubmissionIds(ids);
+  const attachmentsMap = await getAttachmentsBySubmissionIds(ids);
+
+  return combineRecords(result.rows, approvalsMap, guardiansMap, attachmentsMap);
+}
+
 export async function listHostelUndertakingCompletedForms() {
   return listFormsByWhere(
     "AND fs.overall_status IN ('approved'::submission_status, 'rejected'::submission_status)"
   );
 }
 
+export async function listHostelUndertakingOngoingForms() {
+  return listFormsByWhere(
+    "AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)"
+  );
+}
+
 export async function listHostelUndertakingFormsBySubmitterEmail(email: string) {
   return listFormsByWhere("AND lower(u.email) = lower($1)", [email]);
+}
+
+export async function listHostelUndertakingFormsForAdmin() {
+  return listFormsByWhere("");
 }
 
 export async function getHostelUndertakingFormById(submissionId: string) {
@@ -720,6 +789,8 @@ async function approveStage(input: {
   submissionId: string;
   stageNumber: number;
   recommendationText: string;
+  nextStage: number;
+  markApproved: boolean;
 }) {
   const pool = getPgPool();
   if (!pool) {
@@ -761,16 +832,29 @@ async function approveStage(input: {
       [input.submissionId, input.stageNumber, input.recommendationText]
     );
 
-    await client.query(
-      `
-      UPDATE form_submissions
-      SET overall_status = 'approved'::submission_status,
-          current_stage = $2,
-          updated_at = NOW()
-      WHERE id = $1::uuid
-    `,
-      [input.submissionId, input.stageNumber]
-    );
+    if (input.markApproved) {
+      await client.query(
+        `
+        UPDATE form_submissions
+        SET overall_status = 'approved'::submission_status,
+            current_stage = $2,
+            updated_at = NOW()
+        WHERE id = $1::uuid
+      `,
+        [input.submissionId, input.stageNumber]
+      );
+    } else {
+      await client.query(
+        `
+        UPDATE form_submissions
+        SET overall_status = 'in_review'::submission_status,
+            current_stage = $2,
+            updated_at = NOW()
+        WHERE id = $1::uuid
+      `,
+        [input.submissionId, input.nextStage]
+      );
+    }
 
     await client.query("COMMIT");
   } catch (error) {
@@ -849,11 +933,22 @@ export async function approveHostelUndertakingByWarden(input: {
   submissionId: string;
   approverName: string;
   remark: string;
+  approverRoleLabel?: string;
 }) {
+  const roleLabel = (input.approverRoleLabel ?? "Hostel Warden").trim();
+  const workflow = await getWorkflow("hostel-undertaking");
+  if (!workflow) {
+    throw new Error("Hostel Undertaking workflow blueprint not found in database.");
+  }
+
+  const nextStage = getNextStage(workflow, 1);
+
   return approveStage({
     submissionId: input.submissionId,
     stageNumber: 1,
-    recommendationText: `Hostel Warden: ${input.approverName} | ${input.remark}`,
+    nextStage: nextStage ?? 1,
+    markApproved: nextStage === null,
+    recommendationText: `${roleLabel}: ${input.approverName} | ${input.remark}`,
   });
 }
 
@@ -861,10 +956,40 @@ export async function rejectHostelUndertakingByWarden(input: {
   submissionId: string;
   approverName: string;
   remark: string;
+  approverRoleLabel?: string;
 }) {
+  const roleLabel = (input.approverRoleLabel ?? "Hostel Warden").trim();
   return rejectStage({
     submissionId: input.submissionId,
     stageNumber: 1,
-    recommendationText: `Rejected by Hostel Warden: ${input.approverName} | ${input.remark}`,
+    recommendationText: `Rejected by ${roleLabel}: ${input.approverName} | ${input.remark}`,
+  });
+}
+
+export async function approveHostelUndertakingAtStage(input: {
+  submissionId: string;
+  stageNumber: number;
+  nextStage: number;
+  markApproved: boolean;
+  recommendationText: string;
+}) {
+  return approveStage({
+    submissionId: input.submissionId,
+    stageNumber: input.stageNumber,
+    nextStage: input.nextStage,
+    markApproved: input.markApproved,
+    recommendationText: input.recommendationText,
+  });
+}
+
+export async function rejectHostelUndertakingAtStage(input: {
+  submissionId: string;
+  stageNumber: number;
+  recommendationText: string;
+}) {
+  return rejectStage({
+    submissionId: input.submissionId,
+    stageNumber: input.stageNumber,
+    recommendationText: input.recommendationText,
   });
 }

@@ -9,14 +9,19 @@ import {
   getIdentityCardStatusText,
 } from "@/lib/identity-card-status";
 import { notFound, redirect } from "next/navigation";
+import { PrintButton } from "@/components/ui/print-button";
 
 export default async function IdentityCardStatusPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ embed?: string }>;
 }) {
   const user = await requireUser();
   const { id } = await params;
+  const { embed } = await searchParams;
+  const isEmbedMode = embed === "1" || embed === "true";
 
   const form = await getIdentityCardFormById(id);
   if (!form) {
@@ -46,11 +51,17 @@ export default async function IdentityCardStatusPage({
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-10">
+      {isEmbedMode ? (
+        <style>{`.print-hidden{display:none!important;}.app-content{padding-top:0!important;}`}</style>
+      ) : null}
       <div className="mx-auto max-w-4xl space-y-6">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-indigo-600">IIT Ropar - Identity Card</p>
-          <h1 className="mt-1 text-2xl font-bold text-slate-900">Application Status</h1>
-          <p className="mt-1 text-sm text-slate-500">Reference ID: {form.submissionId}</p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-indigo-600">IIT Ropar - Identity Card</p>
+            <h1 className="mt-1 text-2xl font-bold text-slate-900">Application Status</h1>
+            <p className="mt-1 text-sm text-slate-500">Reference ID: {form.submissionId}</p>
+          </div>
+          {!isEmbedMode ? <PrintButton /> : null}
         </div>
 
         <div className={`rounded-xl px-5 py-4 ${getIdentityCardStatusBadgeClass(form)}`}>

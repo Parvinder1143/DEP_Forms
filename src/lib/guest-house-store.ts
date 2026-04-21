@@ -1,5 +1,6 @@
 import { getPgPool } from "@/lib/db";
 import type { AppRole } from "@/lib/mock-db";
+import { getNextStage, getWorkflow } from "@/lib/workflow-engine";
 
 export type GuestHouseStageApproval = {
   stageNumber: number;
@@ -594,10 +595,90 @@ export async function listGuestHouseFormsForStage(stageNumber: number) {
   );
 }
 
+export async function listActionableGuestHouseForms(userRole: string) {
+  const pool = getPgPool();
+  if (!pool) {
+    return [] as GuestHouseFormRecord[];
+  }
+
+  // We find which stages the user's role is listed in for the guest-house-reservation workflow
+  const result = await pool.query(
+    `
+    WITH user_stages AS (
+      SELECT workflow.stage_element->>'stage' AS stage_num
+      FROM app_workflows w,
+           jsonb_array_elements(w.stages) AS workflow(stage_element)
+      WHERE w.id = 'guest-house'
+        AND string_to_array(workflow.stage_element->>'role', ',') @> ARRAY[$1]::text[]
+    )
+    SELECT
+      fs.id AS submission_id,
+      fs.submitted_by,
+      fs.current_stage,
+      fs.overall_status,
+      fs.created_at,
+      fs.updated_at,
+      u.email AS submitted_by_email,
+      ghd.guest_name,
+      ghd.guest_gender,
+      ghd.guest_address,
+      ghd.contact_number,
+      ghd.number_of_guests,
+      ghd.number_of_rooms_required,
+      ghd.occupancy_type,
+      ghd.arrival_date,
+      ghd.arrival_time,
+      ghd.departure_date,
+      ghd.departure_time,
+      ghd.purpose_of_booking,
+      ghd.room_type,
+      ghd.book_executive_suite,
+      ghd.book_business_room,
+      ghd.booking_category,
+      ghd.category_tariff_amount,
+      ghd.undertaking_accepted_at,
+      ghd.remarks_if_any,
+      ghd.boarding_lodging_by_guest,
+      ghd.is_institute_guest,
+      ghd.booking_date,
+      ghd.room_no_confirmed,
+      ghd.sr_no_entered_at_page_no,
+      ghd.entry_date,
+      ghd.check_in_datetime,
+      ghd.check_out_datetime,
+      ghd.office_remarks,
+      ghd.total_charges,
+      ghd.budget_department
+    FROM form_submissions fs
+    JOIN users u ON u.id = fs.submitted_by
+    JOIN guest_house_data ghd ON ghd.submission_id = fs.id
+    WHERE fs.form_type = 'guest_house_reservation'::form_type
+      AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)
+      AND fs.current_stage::text IN (SELECT stage_num FROM user_stages)
+    ORDER BY fs.created_at ASC
+  `,
+    [userRole]
+  );
+
+  const ids = result.rows.map((row) => String(row.submission_id));
+  const approvalsMap = await getApprovalsBySubmissionIds(ids);
+  const proposersMap = await getProposersBySubmissionIds(ids);
+  return combineRecords(result.rows, approvalsMap, proposersMap);
+}
+
 export async function listGuestHouseCompletedForms() {
   return listGuestHouseBase(
     `
       AND fs.overall_status IN ('approved'::submission_status, 'rejected'::submission_status)
+    `,
+    []
+  );
+}
+
+export async function listGuestHouseOngoingForms() {
+  return listGuestHouseBase(
+    `
+      AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)
     `,
     []
   );
@@ -763,11 +844,18 @@ export async function approveGuestHouseStage1(input: {
   approverName: string;
   remark: string;
 }) {
+  const workflow = await getWorkflow("guest-house");
+  if (!workflow) {
+    throw new Error("Guest House workflow blueprint not found in database.");
+  }
+
+  const nextStage = getNextStage(workflow, 1);
+
   return approveStage({
     submissionId: input.submissionId,
     stageNumber: 1,
-    nextStage: 2,
-    markApproved: false,
+    nextStage: nextStage ?? 1,
+    markApproved: nextStage === null,
     recommendationText: `Stage 1 Competent Authority: ${input.approverName} | ${input.remark}`,
   });
 }
@@ -791,16 +879,23 @@ export async function approveGuestHouseStage2(input: {
     throw new Error("Guest house form not found.");
   }
 
+  const workflow = await getWorkflow("guest-house");
+  if (!workflow) {
+    throw new Error("Guest House workflow blueprint not found in database.");
+  }
+
   const skipStage3 = shouldSkipChairmanStage3({
     roomType: form.roomType,
     bookingCategory: form.bookingCategory ?? "",
   });
 
+  const nextStage = skipStage3 ? getNextStage(workflow, 3) : getNextStage(workflow, 2);
+
   await approveStage({
     submissionId: input.submissionId,
     stageNumber: 2,
-    nextStage: skipStage3 ? 2 : 3,
-    markApproved: skipStage3,
+    nextStage: nextStage ?? 2,
+    markApproved: nextStage === null,
     recommendationText: `Guest House In-charge: ${input.approverName} | ${input.officeRemarks}`,
   });
 
@@ -845,11 +940,18 @@ export async function approveGuestHouseStage3(input: {
   approverName: string;
   remark: string;
 }) {
+  const workflow = await getWorkflow("guest-house");
+  if (!workflow) {
+    throw new Error("Guest House workflow blueprint not found in database.");
+  }
+
+  const nextStage = getNextStage(workflow, 3);
+
   return approveStage({
     submissionId: input.submissionId,
     stageNumber: 3,
-    nextStage: 3,
-    markApproved: true,
+    nextStage: nextStage ?? 3,
+    markApproved: nextStage === null,
     recommendationText: `Chairman GH Committee: ${input.approverName} | ${input.remark}`,
   });
 }
@@ -887,5 +989,33 @@ export async function rejectGuestHouseStage3(input: {
     submissionId: input.submissionId,
     stageNumber: 3,
     recommendationText: `Rejected by Chairman GH Committee: ${input.approverName} | ${input.remark}`,
+  });
+}
+
+export async function approveGuestHouseAtStage(input: {
+  submissionId: string;
+  stageNumber: number;
+  nextStage: number;
+  markApproved: boolean;
+  recommendationText: string;
+}) {
+  return approveStage({
+    submissionId: input.submissionId,
+    stageNumber: input.stageNumber,
+    nextStage: input.nextStage,
+    markApproved: input.markApproved,
+    recommendationText: input.recommendationText,
+  });
+}
+
+export async function rejectGuestHouseAtStage(input: {
+  submissionId: string;
+  stageNumber: number;
+  recommendationText: string;
+}) {
+  return rejectStage({
+    submissionId: input.submissionId,
+    stageNumber: input.stageNumber,
+    recommendationText: input.recommendationText,
   });
 }

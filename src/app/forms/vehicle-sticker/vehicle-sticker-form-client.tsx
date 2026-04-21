@@ -1,16 +1,30 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { submitVehicleStickerForm } from "@/app/actions/vehicle-sticker";
+
+function getTodayLocalDate() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 export function VehicleStickerFormClient() {
   const [error, setError] = useState<string | null>(null);
+  const [declarationDate, setDeclarationDate] = useState("");
   const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    setDeclarationDate(getTodayLocalDate());
+  }, []);
 
   function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
     const formData = new FormData(event.currentTarget);
+    formData.set("declarationDate", declarationDate || getTodayLocalDate());
 
     startTransition(async () => {
       try {
@@ -139,7 +153,14 @@ export function VehicleStickerFormClient() {
             </p>
             <div className="mt-4">
               <label className="label">Date *</label>
-              <input name="declarationDate" type="date" required className="input max-w-xs" />
+              <input
+                name="declarationDate"
+                type="date"
+                value={declarationDate}
+                readOnly
+                required
+                className="input max-w-xs bg-slate-100"
+              />
             </div>
           </section>
 

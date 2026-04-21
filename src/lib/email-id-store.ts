@@ -672,6 +672,7 @@ export async function listEmailIdForms(params?: {
 
 export async function addForwardingApproval(input: {
   formId: string;
+  stage: number;
   section: ForwardingSection;
   approverName: string;
 }) {
@@ -698,8 +699,8 @@ export async function addForwardingApproval(input: {
       throw new Error("Form not found.");
     }
 
-    if (formResult.rows[0].status !== "PENDING") {
-      throw new Error("Form is not in PENDING state.");
+    if (formResult.rows[0].status === "REJECTED" || formResult.rows[0].status === "ISSUED") {
+      throw new Error("Form is already completed.");
     }
 
     const approvalId = `apr_${randomUUID()}`;
@@ -716,7 +717,7 @@ export async function addForwardingApproval(input: {
         tentative_removal_date,
         id_created_by
       )
-      VALUES ($1, $2, 1, $3, $4, NULL, NULL, NULL, NULL)
+      VALUES ($1, $2, $3, $4, $5, NULL, NULL, NULL, NULL)
       RETURNING
         id,
         created_at,
@@ -729,7 +730,7 @@ export async function addForwardingApproval(input: {
         tentative_removal_date,
         id_created_by
     `,
-      [approvalId, input.formId, input.section, input.approverName]
+      [approvalId, input.formId, input.stage, input.section, input.approverName]
     );
 
     await client.query(
@@ -768,6 +769,7 @@ export async function addForwardingApproval(input: {
 
 export async function addIssueApproval(input: {
   formId: string;
+  stage: number;
   assignedEmailId: string;
   dateOfCreation: string;
   tentativeRemovalDate: string | null;
@@ -796,8 +798,8 @@ export async function addIssueApproval(input: {
       throw new Error("Form not found.");
     }
 
-    if (formResult.rows[0].status !== "FORWARDED") {
-      throw new Error("Form has not been forwarded yet.");
+    if (formResult.rows[0].status === "REJECTED" || formResult.rows[0].status === "ISSUED") {
+      throw new Error("Form is already completed.");
     }
 
     const approvalId = `apr_${randomUUID()}`;
@@ -814,7 +816,7 @@ export async function addIssueApproval(input: {
         tentative_removal_date,
         id_created_by
       )
-      VALUES ($1, $2, 2, NULL, $3, $4, $5, $6, $3)
+      VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $4)
       RETURNING
         id,
         created_at,
@@ -830,6 +832,7 @@ export async function addIssueApproval(input: {
       [
         approvalId,
         input.formId,
+        input.stage,
         input.idCreatedBy,
         input.assignedEmailId,
         input.dateOfCreation,
@@ -873,6 +876,7 @@ export async function addIssueApproval(input: {
 
 export async function rejectEmailIdForm(input: {
   formId: string;
+  stage: number;
   section: ForwardingSection;
   approverName: string;
   remark: string;
@@ -900,8 +904,8 @@ export async function rejectEmailIdForm(input: {
       throw new Error("Form not found.");
     }
 
-    if (formResult.rows[0].status !== "PENDING") {
-      throw new Error("Form is not in PENDING state.");
+    if (formResult.rows[0].status === "REJECTED" || formResult.rows[0].status === "ISSUED") {
+      throw new Error("Form is already completed.");
     }
 
     const approvalId = `apr_${randomUUID()}`;
@@ -918,7 +922,7 @@ export async function rejectEmailIdForm(input: {
         tentative_removal_date,
         id_created_by
       )
-      VALUES ($1, $2, 1, $3, $4, NULL, NULL, NULL, NULL)
+      VALUES ($1, $2, $3, $4, $5, NULL, NULL, NULL, NULL)
       RETURNING
         id,
         created_at,
@@ -934,6 +938,7 @@ export async function rejectEmailIdForm(input: {
       [
         approvalId,
         input.formId,
+        input.stage,
         input.section,
         `Rejected by ${input.approverName} | ${input.remark}`,
       ]

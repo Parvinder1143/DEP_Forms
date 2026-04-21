@@ -10,7 +10,7 @@ export default async function PendingRolePage() {
     if (user.role === "SYSTEM_ADMIN") {
       redirect("/admin");
     }
-    redirect(getDashboardPathForRole(user.role));
+    redirect(await getDashboardPathForRole(user.role));
   }
 
   if (!isInstituteEmail(user.email)) {
@@ -37,13 +37,13 @@ export default async function PendingRolePage() {
         <PendingRoleAutoRedirect />
 
         <div className="mt-6 flex gap-3">
-          <Link
+          <Link prefetch={false}
             href="/"
             className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:border-indigo-300 hover:text-indigo-700"
           >
             Go to home
           </Link>
-          <Link
+          <Link prefetch={false}
             href="/sign-in"
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
           >

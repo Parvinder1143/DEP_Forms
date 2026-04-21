@@ -3,19 +3,27 @@ import {
   getHostelUndertakingFormById,
   type HostelUndertakingAttachmentRecord,
 } from "@/lib/hostel-undertaking-store";
+import { roleGroupToLabel } from "@/lib/email-id-workflow";
+import { getRoleLabel } from "@/lib/roles";
+import { getWorkflow } from "@/lib/workflow-engine";
 import {
   getHostelUndertakingStatusBadgeClass,
   getHostelUndertakingStatusText,
 } from "@/lib/hostel-undertaking-status";
 import { notFound, redirect } from "next/navigation";
+import { PrintButton } from "@/components/ui/print-button";
 
 export default async function HostelUndertakingStatusPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ embed?: string }>;
 }) {
   const user = await requireUser();
   const { id } = await params;
+  const { embed } = await searchParams;
+  const isEmbedMode = embed === "1" || embed === "true";
 
   const form = await getHostelUndertakingFormById(id);
   if (!form) {
@@ -32,13 +40,36 @@ export default async function HostelUndertakingStatusPage({
     supporting_document: "Parent Signed Undertaking",
   };
 
+  const workflow = await getWorkflow("hostel-undertaking");
+  const stageFlow = workflow
+    ? [...workflow.stages]
+        .sort((a, b) => a.stage - b.stage)
+        .map((stage) => ({
+          stageNumber: stage.stage,
+          stageLabel: roleGroupToLabel(
+            stage.role,
+            getRoleLabel,
+            stage.mode === "AND" ? "AND" : "OR"
+          ),
+        }))
+    : form.approvals.map((approval) => ({
+        stageNumber: approval.stageNumber,
+        stageLabel: approval.stageName,
+      }));
+
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-10">
+      {isEmbedMode ? (
+        <style>{`.print-hidden{display:none!important;}.app-content{padding-top:0!important;}`}</style>
+      ) : null}
       <div className="mx-auto max-w-4xl space-y-6">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-indigo-600">IIT Ropar - Hostel Undertaking</p>
-          <h1 className="mt-1 text-2xl font-bold text-slate-900">Application Status</h1>
-          <p className="mt-1 text-sm text-slate-500">Reference ID: {form.submissionId}</p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-indigo-600">IIT Ropar - Hostel Undertaking</p>
+            <h1 className="mt-1 text-2xl font-bold text-slate-900">Application Status</h1>
+            <p className="mt-1 text-sm text-slate-500">Reference ID: {form.submissionId}</p>
+          </div>
+          {!isEmbedMode ? <PrintButton /> : null}
         </div>
 
         <div className={`rounded-xl px-5 py-4 ${getHostelUndertakingStatusBadgeClass(form)}`}>
@@ -48,20 +79,31 @@ export default async function HostelUndertakingStatusPage({
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-700">Stage Flow</h2>
           <ol className="space-y-3">
-            {form.approvals.map((approval) => {
-              const isComplete = approval.decision === "approved";
-              const isRejected = approval.decision === "rejected";
+            {stageFlow.map((stage) => {
+              const approval = form.approvals.find((entry) => entry.stageNumber === stage.stageNumber);
+              const isComplete =
+                form.overallStatus === "approved" ||
+                approval?.decision === "approved" ||
+                form.currentStage > stage.stageNumber;
+              const isRejected = approval?.decision === "rejected";
+              const isCurrent =
+                !isRejected && !isComplete && form.currentStage === stage.stageNumber;
+
               return (
-                <li key={approval.stageNumber} className="rounded-lg border border-slate-200 p-3 text-sm">
-                  <p className="font-semibold text-slate-800">Stage {approval.stageNumber} - {approval.stageName}</p>
+                <li key={stage.stageNumber} className="rounded-lg border border-slate-200 p-3 text-sm">
+                  <p className="font-semibold text-slate-800">
+                    Stage {stage.stageNumber} - {stage.stageLabel}
+                  </p>
                   <p className="mt-1 text-slate-600">
                     {isRejected
                       ? "Rejected"
                       : isComplete
                         ? "Completed"
-                        : "Pending"}
+                        : isCurrent
+                          ? "Current stage"
+                          : "Pending"}
                   </p>
-                  {approval.recommendationText ? (
+                  {approval?.recommendationText ? (
                     <p className="mt-1 text-slate-500">Remark: {approval.recommendationText}</p>
                   ) : null}
                 </li>

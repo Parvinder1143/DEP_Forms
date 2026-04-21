@@ -1,8 +1,10 @@
 "use client";
 
 import {
+  approveVehicleStickerAtCurrentStage,
   approveVehicleStickerByHod,
   rejectVehicleStickerByHod,
+  rejectVehicleStickerAtCurrentStage,
   rejectVehicleStickerBySecurityOffice,
   rejectVehicleStickerByStudentAffairsHostel,
   rejectVehicleStickerBySupervisor,
@@ -34,7 +36,7 @@ export function SupervisorPanel({ submissionId }: { submissionId: string }) {
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4 rounded-xl border border-amber-200 bg-amber-50 p-5">
+    <form onSubmit={onSubmit} className="print-hidden space-y-4 rounded-xl border border-amber-200 bg-amber-50 p-5">
       <h3 className="font-semibold text-amber-800">Stage 1 - Supervisor Recommendation</h3>
       <div>
         <label className="label">Supervisor Name</label>
@@ -73,6 +75,7 @@ export function SupervisorPanel({ submissionId }: { submissionId: string }) {
 
 export function HodPanel({ submissionId }: { submissionId: string }) {
   const [approverName, setApproverName] = useState("");
+  const [validUpto, setValidUpto] = useState("");
   const [rejectRemark, setRejectRemark] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -83,7 +86,7 @@ export function HodPanel({ submissionId }: { submissionId: string }) {
     setError(null);
     startTransition(async () => {
       try {
-        await approveVehicleStickerByHod(submissionId, approverName);
+        await approveVehicleStickerByHod(submissionId, approverName, validUpto);
         router.refresh();
       } catch (err) {
         setError((err as Error).message);
@@ -92,11 +95,15 @@ export function HodPanel({ submissionId }: { submissionId: string }) {
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4 rounded-xl border border-blue-200 bg-blue-50 p-5">
+    <form onSubmit={onSubmit} className="print-hidden space-y-4 rounded-xl border border-blue-200 bg-blue-50 p-5">
       <h3 className="font-semibold text-blue-800">Stage 2 - HoD Recommendation</h3>
       <div>
         <label className="label">HoD / Section Head Name</label>
         <input value={approverName} onChange={(e) => setApproverName(e.target.value)} required className="input" />
+      </div>
+      <div>
+        <label className="label">Valid Upto *</label>
+        <input type="date" value={validUpto} onChange={(e) => setValidUpto(e.target.value)} required className="input" />
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
       <button disabled={isPending} className="w-full rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-60">
@@ -157,7 +164,7 @@ export function StudentAffairsHostelPanel({ submissionId }: { submissionId: stri
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4 rounded-xl border border-purple-200 bg-purple-50 p-5">
+    <form onSubmit={onSubmit} className="print-hidden space-y-4 rounded-xl border border-purple-200 bg-purple-50 p-5">
       <h3 className="font-semibold text-purple-800">Stage 3 - Student Affairs</h3>
       <div>
         <label className="label">Approver Name</label>
@@ -209,7 +216,13 @@ export function StudentAffairsHostelPanel({ submissionId }: { submissionId: stri
   );
 }
 
-export function SecurityOfficePanel({ submissionId }: { submissionId: string }) {
+export function SecurityOfficePanel({
+  submissionId,
+  stageNumber = 4,
+}: {
+  submissionId: string;
+  stageNumber?: number;
+}) {
   const [approverName, setApproverName] = useState("");
   const [rejectRemark, setRejectRemark] = useState("");
   const [issuedStickerNo, setIssuedStickerNo] = useState("");
@@ -239,8 +252,8 @@ export function SecurityOfficePanel({ submissionId }: { submissionId: string }) 
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4 rounded-xl border border-green-200 bg-green-50 p-5">
-      <h3 className="font-semibold text-green-800">Stage 4 - Security Office</h3>
+    <form onSubmit={onSubmit} className="print-hidden space-y-4 rounded-xl border border-green-200 bg-green-50 p-5">
+      <h3 className="font-semibold text-green-800">Stage {stageNumber} - Security Office</h3>
       <div>
         <label className="label">Security Officer Name</label>
         <input value={approverName} onChange={(e) => setApproverName(e.target.value)} required className="input" />
@@ -275,6 +288,75 @@ export function SecurityOfficePanel({ submissionId }: { submissionId: string }) 
               try {
                 setError(null);
                 await rejectVehicleStickerBySecurityOffice(submissionId, approverName, rejectRemark);
+                router.refresh();
+              } catch (err) {
+                setError((err as Error).message);
+              }
+            })
+          }
+          className="mt-3 w-full rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-60"
+        >
+          {isPending ? "Rejecting..." : "Reject with Remark"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+export function DynamicVehicleStagePanel({
+  submissionId,
+  stageNumber,
+}: {
+  submissionId: string;
+  stageNumber: number;
+}) {
+  const [approverName, setApproverName] = useState("");
+  const [remark, setRemark] = useState("");
+  const [rejectRemark, setRejectRemark] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+  const router = useRouter();
+
+  function onSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    setError(null);
+    startTransition(async () => {
+      try {
+        await approveVehicleStickerAtCurrentStage(submissionId, approverName, remark);
+        router.refresh();
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="print-hidden space-y-4 rounded-xl border border-slate-300 bg-slate-50 p-5">
+      <h3 className="font-semibold text-slate-800">Stage {stageNumber} - Standard Review</h3>
+      <div>
+        <label className="label">Approver Name</label>
+        <input value={approverName} onChange={(e) => setApproverName(e.target.value)} required className="input" />
+      </div>
+      <div>
+        <label className="label">Approval Remark</label>
+        <input value={remark} onChange={(e) => setRemark(e.target.value)} required className="input" />
+      </div>
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      <button disabled={isPending} className="w-full rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60">
+        {isPending ? "Approving..." : `Approve Stage ${stageNumber}`}
+      </button>
+
+      <div className="border-t border-slate-300 pt-4">
+        <label className="label">Rejection Remark</label>
+        <input value={rejectRemark} onChange={(e) => setRejectRemark(e.target.value)} className="input" placeholder="Reason for rejection" />
+        <button
+          type="button"
+          disabled={isPending}
+          onClick={() =>
+            startTransition(async () => {
+              try {
+                setError(null);
+                await rejectVehicleStickerAtCurrentStage(submissionId, approverName, rejectRemark);
                 router.refresh();
               } catch (err) {
                 setError((err as Error).message);

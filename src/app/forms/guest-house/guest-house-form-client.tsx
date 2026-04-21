@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { submitGuestHouseForm } from "@/app/actions/guest-house";
 
 const bookingTerms: string[] = [
@@ -19,6 +19,17 @@ const bookingTerms: string[] = [
   "Accommodation is subject to competent authority approval and room availability.",
 ];
 
+const FIXED_ARRIVAL_TIME = "13:00";
+const FIXED_DEPARTURE_TIME = "11:00";
+
+function getTodayLocalDate() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 export function GuestHouseFormClient() {
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -26,6 +37,11 @@ export function GuestHouseFormClient() {
   const [bookingCategory, setBookingCategory] = useState("");
   const [isInstituteGuest, setIsInstituteGuest] = useState<"yes" | "no" | "">("");
   const [guestToBeCharged, setGuestToBeCharged] = useState(false);
+  const [bookingDate, setBookingDate] = useState("");
+
+  useEffect(() => {
+    setBookingDate(getTodayLocalDate());
+  }, []);
 
   const categoryOptions =
     roomType === "executive_suite"
@@ -40,6 +56,17 @@ export function GuestHouseFormClient() {
             { value: "b_2", label: "B-2 (Rs. 1200)", amount: 1200 },
           ]
         : [];
+
+  const allCategoryOptions = [
+    { value: "cat_a", label: "Cat-A (Free)" },
+    { value: "cat_b", label: "Cat-B (Rs. 3500) - Executive Suite" },
+    { value: "b_1", label: "B-1 (Rs. 2000) - Business Room" },
+    { value: "b_2", label: "B-2 (Rs. 1200) - Business Room" },
+  ];
+
+  const visibleCategoryOptions = roomType
+    ? categoryOptions.map((option) => ({ value: option.value, label: option.label }))
+    : allCategoryOptions;
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -197,7 +224,14 @@ export function GuestHouseFormClient() {
               </div>
               <div>
                 <label className="label">Arrival Time *</label>
-                <input name="arrivalTime" type="time" required className="input" />
+                <input
+                  name="arrivalTime"
+                  type="time"
+                  value={FIXED_ARRIVAL_TIME}
+                  readOnly
+                  required
+                  className="input bg-slate-100"
+                />
               </div>
               <div>
                 <label className="label">Departure Date *</label>
@@ -205,7 +239,14 @@ export function GuestHouseFormClient() {
               </div>
               <div>
                 <label className="label">Departure Time *</label>
-                <input name="departureTime" type="time" required className="input" />
+                <input
+                  name="departureTime"
+                  type="time"
+                  value={FIXED_DEPARTURE_TIME}
+                  readOnly
+                  required
+                  className="input bg-slate-100"
+                />
               </div>
               <div className="sm:col-span-2">
                 <label className="label">Purpose of Booking *</label>
@@ -243,10 +284,9 @@ export function GuestHouseFormClient() {
                   className="input"
                   value={bookingCategory}
                   onChange={(event) => setBookingCategory(event.target.value)}
-                  disabled={!roomType}
                 >
-                  <option value="">{roomType ? "Select category" : "Select room type first"}</option>
-                  {categoryOptions.map((option) => (
+                  <option value="">Select category</option>
+                  {visibleCategoryOptions.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>
@@ -255,7 +295,14 @@ export function GuestHouseFormClient() {
               </div>
               <div>
                 <label className="label">Booking Date *</label>
-                <input name="bookingDate" type="date" required className="input" />
+                <input
+                  name="bookingDate"
+                  type="date"
+                  value={bookingDate}
+                  readOnly
+                  required
+                  className="input bg-slate-100"
+                />
               </div>
             </div>
           </div>

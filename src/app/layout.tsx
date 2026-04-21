@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 import { TopNav } from "@/components/top-nav";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const plusJakarta = Plus_Jakarta_Sans({
+  variable: "--font-plus",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
+  display: "swap",
 });
 
 const geistMono = Geist_Mono({
@@ -24,13 +26,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">
-        <TopNav />
-        {children}
+    <html lang="en" className={`${plusJakarta.variable} ${geistMono.variable} h-full`}>
+      <body className="min-h-screen bg-white text-slate-900">
+        <div className="app-canvas">
+          <div className="app-aurora app-aurora-a" aria-hidden="true" />
+          <div className="app-aurora app-aurora-b" aria-hidden="true" />
+          <div className="app-aurora app-aurora-c" aria-hidden="true" />
+          <div className="app-grid" aria-hidden="true" />
+
+          <div className="app-content pt-20">
+            <TopNav />
+            {children}
+          </div>
+        </div>
       </body>
     </html>
   );

@@ -5,33 +5,27 @@ import {
   getEmailFormStatusText,
   getForwardingSectionLabel,
 } from "@/lib/email-id-status";
+import {
+  getCurrentEmailWorkflowStage,
+  getSortedWorkflowStages,
+  roleGroupToLabel,
+} from "@/lib/email-id-workflow";
+import { getWorkflow } from "@/lib/workflow-engine";
+import { getRoleLabel } from "@/lib/roles";
 import { notFound, redirect } from "next/navigation";
-
-const STATUS_CONFIG = {
-  PENDING: {
-    label: "Pending",
-    description:
-      "Your request has been submitted and is awaiting review by the Forwarding Authority (Academics / Establishment / R&D).",
-  },
-  FORWARDED: {
-    label: "Pending",
-    description:
-      "The Forwarding Authority has approved your request. It is now with IT Admin for email ID creation.",
-  },
-  ISSUED: {
-    label: "Email ID Issued",
-    description:
-      "Your IIT Ropar email ID has been created successfully. See details below.",
-  },
-};
+import { PrintButton } from "@/components/ui/print-button";
 
 export default async function EmailIdStatusPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ embed?: string }>;
 }) {
   const user = await requireUser();
   const { id } = await params;
+  const { embed } = await searchParams;
+  const isEmbedMode = embed === "1" || embed === "true";
   const form = await getEmailIdFormById(id);
 
   if (!form) notFound();
@@ -46,22 +40,47 @@ export default async function EmailIdStatusPage({
     redirect("/");
   }
 
-  const statusCfg = STATUS_CONFIG[form.status as keyof typeof STATUS_CONFIG];
-  const stage1 = form.approvals.find((a: { stage: number }) => a.stage === 1);
-  const stage2 = form.approvals.find((a: { stage: number }) => a.stage === 2);
+  const workflow = await getWorkflow("email-id");
+  if (!workflow) {
+    throw new Error("Email workflow blueprint not found in database.");
+  }
+
+  const sortedStages = getSortedWorkflowStages(workflow);
+  const currentStage = getCurrentEmailWorkflowStage(form, workflow);
+  const approvalByStage = new Map(form.approvals.map((approval) => [approval.stage, approval]));
+  const currentStageDef =
+    currentStage === null ? null : sortedStages.find((stage) => stage.stage === currentStage) ?? null;
+  const statusDescription =
+    form.status === "ISSUED"
+      ? "Your IIT Ropar email ID has been created successfully. See details below."
+      : form.status === "REJECTED"
+        ? "Your request has been rejected. Please check the remarks in the approval timeline."
+        : currentStageDef
+          ? `Your request is awaiting review by ${roleGroupToLabel(
+              currentStageDef.role,
+              getRoleLabel,
+              currentStageDef.mode === "AND" ? "AND" : "OR"
+            )}.`
+          : "Your request is being processed.";
 
   return (
     <div className="min-h-screen bg-slate-50 py-10 px-4">
+      {isEmbedMode ? (
+        <style>{`.print-hidden{display:none!important;}.app-content{padding-top:0!important;}`}</style>
+      ) : null}
       <div className="mx-auto max-w-2xl space-y-6">
         {/* Header */}
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-indigo-600">
-            IIT Ropar — Email ID Request
-          </p>
-          <h1 className="mt-1 text-2xl font-bold text-slate-900">
-            Application Status
-          </h1>
-          <p className="mt-1 text-sm text-slate-500">Reference ID: {form.id}</p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-indigo-600">
+              IIT Ropar — Email ID Request
+            </p>
+            <h1 className="mt-1 text-2xl font-bold text-slate-900">
+              Application Status
+            </h1>
+            <p className="mt-1 text-sm text-slate-500">Reference ID: {form.id}</p>
+          </div>
+          {!isEmbedMode ? <PrintButton /> : null}
         </div>
 
         {/* Status Banner */}
@@ -69,7 +88,7 @@ export default async function EmailIdStatusPage({
           <p className="font-semibold">
             {getEmailFormStatusText({ status: form.status, approvals: form.approvals })}
           </p>
-          <p className="mt-0.5 text-sm">{statusCfg.description}</p>
+          <p className="mt-0.5 text-sm">{statusDescription}</p>
         </div>
 
         {/* Stage Tracker */}
@@ -89,77 +108,55 @@ export default async function EmailIdStatusPage({
               </p>
             </li>
 
-            {/* Stage 1: Forwarding Authority */}
-            <li className="ml-6">
-              <span
-                className={`absolute -left-3 flex h-6 w-6 items-center justify-center rounded-full ring-4 ring-white text-xs font-bold ${
-                  stage1
-                    ? "bg-indigo-600 text-white"
-                    : "bg-slate-200 text-slate-500"
-                }`}
-              >
-                {stage1 ? "✓" : "2"}
-              </span>
-              <p className="font-medium text-slate-900">
-                Forwarding Authority Approval
-              </p>
-              {stage1 ? (
-                <p className="text-sm text-slate-500">
-                  Approved by {stage1.approverName} (
-                  {getForwardingSectionLabel(stage1.forwardingSection)}
-                  ) on{" "}
-                  {new Date(stage1.createdAt).toLocaleString("en-IN")}
-                </p>
-              ) : (
-                <p className="text-sm text-slate-400">Awaiting approval</p>
-              )}
-            </li>
+            {sortedStages.map((stage, index) => {
+              const approval = approvalByStage.get(stage.stage);
+              const isCurrent = currentStage === stage.stage;
+              const done = Boolean(approval);
 
-            {/* Stage 2: IT Admin */}
-            <li className="ml-6">
-              <span
-                className={`absolute -left-3 flex h-6 w-6 items-center justify-center rounded-full ring-4 ring-white text-xs font-bold ${
-                  stage2
-                    ? "bg-green-600 text-white"
-                    : "bg-slate-200 text-slate-500"
-                }`}
-              >
-                {stage2 ? "✓" : "3"}
-              </span>
-              <p className="font-medium text-slate-900">Email ID Issuance</p>
-              {stage2 ? (
-                <div className="mt-1 text-sm text-slate-600 space-y-1">
-                  <p>
-                    <span className="font-medium">Assigned Email:</span>{" "}
-                    <span className="font-mono text-indigo-700">
-                      {stage2.assignedEmailId}
-                    </span>
+              return (
+                <li key={stage.stage} className="ml-6">
+                  <span
+                    className={`absolute -left-3 flex h-6 w-6 items-center justify-center rounded-full ring-4 ring-white text-xs font-bold ${
+                      done
+                        ? "bg-indigo-600 text-white"
+                        : isCurrent
+                          ? "bg-amber-500 text-white"
+                          : "bg-slate-200 text-slate-500"
+                    }`}
+                  >
+                    {done ? "✓" : index + 2}
+                  </span>
+                  <p className="font-medium text-slate-900">
+                    Stage {stage.stage} - {roleGroupToLabel(
+                      stage.role,
+                      getRoleLabel,
+                      stage.mode === "AND" ? "AND" : "OR"
+                    )}
                   </p>
-                  <p>
-                    <span className="font-medium">Created on:</span>{" "}
-                    {stage2.dateOfCreation
-                      ? new Date(stage2.dateOfCreation).toLocaleDateString(
-                          "en-IN"
-                        )
-                      : "—"}
-                  </p>
-                  <p>
-                    <span className="font-medium">Tentative Removal:</span>{" "}
-                    {stage2.tentativeRemovalDate
-                      ? new Date(
-                          stage2.tentativeRemovalDate
-                        ).toLocaleDateString("en-IN")
-                      : "N/A"}
-                  </p>
-                  <p>
-                    <span className="font-medium">Created by:</span>{" "}
-                    {stage2.idCreatedBy}
-                  </p>
-                </div>
-              ) : (
-                <p className="text-sm text-slate-400">Pending IT Admin</p>
-              )}
-            </li>
+                  {approval ? (
+                    <div className="mt-1 text-sm text-slate-600 space-y-1">
+                      <p>
+                        Approved by {approval.approverName}
+                        {approval.forwardingSection
+                          ? ` (${getForwardingSectionLabel(approval.forwardingSection)})`
+                          : ""}{" "}
+                        on {new Date(approval.createdAt).toLocaleString("en-IN")}
+                      </p>
+                      {approval.assignedEmailId ? (
+                        <p>
+                          <span className="font-medium">Assigned Email:</span>{" "}
+                          <span className="font-mono text-indigo-700">{approval.assignedEmailId}</span>
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : isCurrent ? (
+                    <p className="text-sm text-slate-500">Awaiting approval at this stage</p>
+                  ) : (
+                    <p className="text-sm text-slate-400">Pending previous stage completion</p>
+                  )}
+                </li>
+              );
+            })}
           </ol>
         </div>
 

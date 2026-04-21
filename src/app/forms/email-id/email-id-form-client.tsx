@@ -33,6 +33,7 @@ const ENGAGEMENT_TYPES = [
 export function EmailIdFormClient() {
   const [isPending, startTransition] = useTransition();
   const [natureOfEngagement, setNatureOfEngagement] = useState("");
+  const [department, setDepartment] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const isTemp =
@@ -170,13 +171,30 @@ export function EmailIdFormClient() {
               </div>
               <div>
                 <label className="label">Department / Section *</label>
-                <select name="department" required className="input">
+                <select
+                  name="department"
+                  required
+                  className="input"
+                  value={department}
+                  onChange={(e) => setDepartment(e.target.value)}
+                >
                   <option value="">Select</option>
                   {DEPARTMENTS.map((d) => (
                     <option key={d}>{d}</option>
                   ))}
                 </select>
               </div>
+              {department === "Other" && (
+                <div className="sm:col-span-2">
+                  <label className="label">Other Department / Section *</label>
+                  <input
+                    name="departmentOther"
+                    required
+                    placeholder="Enter department / section"
+                    className="input"
+                  />
+                </div>
+              )}
             </div>
 
             {isTemp && (

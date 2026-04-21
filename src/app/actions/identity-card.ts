@@ -1,17 +1,136 @@
 "use server";
 
-import { requireRole } from "@/lib/auth";
+import { requireRole, requireUser } from "@/lib/auth";
+import { getActiveDelegationForUser } from "@/lib/delegation-store";
 import {
+  approveIdentityCardAtStage,
   approveIdentityCardStage1,
   approveIdentityCardStage2,
   approveIdentityCardStage3,
   createIdentityCardForm,
   getIdentityCardFormById,
+  rejectIdentityCardAtStage,
   rejectIdentityCardStage,
   resolveWorkflowUserIdForActor,
 } from "@/lib/identity-card-store";
+import {
+  getNextStage,
+  getStagesForRole,
+  getWorkflow,
+  getWorkflowStageMode,
+  getWorkflowStageRoleCodes,
+} from "@/lib/workflow-engine";
+import {
+  addRoleApprovalForStage,
+  clearStageRoleApprovals,
+  listApprovedRolesForStage,
+} from "@/lib/workflow-stage-approvals";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+
+async function getIdentityCardWorkflowOrThrow() {
+  const workflow = await getWorkflow("identity-card");
+  if (!workflow) {
+    throw new Error("Identity Card workflow blueprint not found in database.");
+  }
+  return workflow;
+}
+
+async function resolveIdentityCardRoleContext() {
+  const user = await requireUser();
+  const delegation = await getActiveDelegationForUser(user.id);
+  const activeRole = delegation?.delegatedRole ?? user.role;
+
+  if (!activeRole) {
+    throw new Error("You do not have an assigned stakeholder role.");
+  }
+
+  return {
+    user,
+    activeRole,
+    isSystemAdmin: activeRole === "SYSTEM_ADMIN",
+  };
+}
+
+async function resolveIdentityCardActionContext(submissionId: string) {
+  const roleContext = await resolveIdentityCardRoleContext();
+  const workflow = await getIdentityCardWorkflowOrThrow();
+
+  const form = await getIdentityCardFormById(submissionId);
+  if (!form) {
+    throw new Error("Identity card form not found.");
+  }
+  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
+    throw new Error("This request is already finalized.");
+  }
+
+  if (!roleContext.isSystemAdmin) {
+    const roleStages = getStagesForRole(workflow, roleContext.activeRole);
+    if (!roleStages.includes(form.currentStage)) {
+      throw new Error("You are not authorized for the current stage.");
+    }
+  }
+
+  return {
+    ...roleContext,
+    workflow,
+    form,
+  };
+}
+
+async function assertIdentityCardBulkStageAccess(stage: number) {
+  const roleContext = await resolveIdentityCardRoleContext();
+  const workflow = await getIdentityCardWorkflowOrThrow();
+
+  if (!roleContext.isSystemAdmin) {
+    const roleStages = getStagesForRole(workflow, roleContext.activeRole);
+    if (!roleStages.includes(stage)) {
+      throw new Error("You are not authorized to review this stage in bulk.");
+    }
+  }
+
+  return { ...roleContext, workflow };
+}
+
+async function shouldFinalizeIdentityCardStageApproval(input: {
+  submissionId: string;
+  stageNumber: number;
+  activeRole: string;
+  isSystemAdmin: boolean;
+  workflow: Awaited<ReturnType<typeof getIdentityCardWorkflowOrThrow>>;
+  user: { id: string; email: string; fullName?: string | null };
+}) {
+  const stageDefinition = input.workflow.stages.find((stage) => stage.stage === input.stageNumber);
+  if (!stageDefinition) {
+    throw new Error("Current workflow stage is no longer available.");
+  }
+
+  if (input.isSystemAdmin) {
+    return true;
+  }
+
+  const mode = getWorkflowStageMode(stageDefinition);
+  const requiredRoles = getWorkflowStageRoleCodes(stageDefinition).filter((role) => role !== "SYSTEM_ADMIN");
+  if (mode !== "AND" || requiredRoles.length <= 1) {
+    return true;
+  }
+
+  const insertResult = await addRoleApprovalForStage({
+    submissionId: input.submissionId,
+    stageNumber: input.stageNumber,
+    roleCode: input.activeRole,
+    approverUserId: input.user.id,
+    approverEmail: input.user.email,
+    approverName: input.user.fullName ?? null,
+  });
+
+  if (!insertResult.inserted) {
+    throw new Error("This role has already approved this stage. Waiting for remaining approvals.");
+  }
+
+  const approvedRoles = new Set(await listApprovedRolesForStage(input.submissionId, input.stageNumber));
+  return requiredRoles.every((roleCode) => approvedRoles.has(roleCode));
+}
 
 function requiredString(formData: FormData, key: string, label: string) {
   const value = String(formData.get(key) ?? "").trim();
@@ -55,7 +174,7 @@ export async function submitIdentityCardForm(formData: FormData) {
     throw new Error("Contract Upto is required for Temporary or On contract employment type.");
   }
 
-  const previousCardValidity = isRenewal
+  const previousCardValidity = isRenewal || isDuplicate
     ? requiredString(formData, "previousCardValidity", "Previous card validity")
     : null;
 
@@ -89,7 +208,7 @@ export async function submitIdentityCardForm(formData: FormData) {
     presentAddressLine2: requiredString(formData, "presentAddressLine2", "Present address line 2"),
     officePhone: requiredString(formData, "officePhone", "Office phone"),
     mobileNumber: requiredString(formData, "mobileNumber", "Mobile number"),
-    emailId: requiredString(formData, "emailId", "Email ID"),
+    emailId: user.email,
     cardType: cardType as "fresh" | "renewal" | "duplicate",
     previousCardValidity,
     reasonForRenewal,
@@ -108,29 +227,36 @@ export async function approveIdentityCardByHodOrSectionHead(
   submissionId: string,
   approverName: string
 ) {
-  const user = await requireRole(["HOD", "SECTION_HEAD", "SYSTEM_ADMIN"]);
-
-  const form = await getIdentityCardFormById(submissionId);
-  if (!form) {
-    throw new Error("Identity card form not found.");
-  }
-  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
-    throw new Error("This request is already finalized.");
-  }
+  const { form, activeRole, workflow, user, isSystemAdmin } =
+    await resolveIdentityCardActionContext(submissionId);
   if (form.currentStage !== 1) {
-    throw new Error("This form is not at HoD/Section Head stage.");
+    throw new Error("This request is not in the expected stage for this action.");
   }
 
-  const roleLabel = user.role === "SECTION_HEAD" ? "Section Head" : "HoD";
+  const finalizeStage = await shouldFinalizeIdentityCardStageApproval({
+    submissionId,
+    stageNumber: form.currentStage,
+    activeRole,
+    isSystemAdmin,
+    workflow,
+    user,
+  });
+  if (!finalizeStage) {
+    revalidatePath(`/dashboard/identity-card/${submissionId}`);
+    revalidatePath("/dashboard/identity-card");
+    return;
+  }
+
+  const roleLabel = activeRole === "SECTION_HEAD" ? "Section Head" : "HoD";
   await approveIdentityCardStage1({
     submissionId,
     approverName: approverName.trim(),
     approverRoleLabel: roleLabel,
   });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
   revalidatePath(`/dashboard/identity-card/${submissionId}`);
-  revalidatePath("/dashboard/identity-card/hod-section-head");
-  revalidatePath("/dashboard/identity-card/deputy-registrar");
+  revalidatePath("/dashboard/identity-card");
   revalidatePath(`/forms/identity-card/${submissionId}`);
 }
 
@@ -139,21 +265,13 @@ export async function rejectIdentityCardByHodOrSectionHead(
   approverName: string,
   remark: string
 ) {
-  await requireRole(["HOD", "SECTION_HEAD", "SYSTEM_ADMIN"]);
-
   if (!remark.trim()) {
     throw new Error("Rejection remark is required.");
   }
 
-  const form = await getIdentityCardFormById(submissionId);
-  if (!form) {
-    throw new Error("Identity card form not found.");
-  }
-  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
-    throw new Error("This request is already finalized.");
-  }
+  const { form } = await resolveIdentityCardActionContext(submissionId);
   if (form.currentStage !== 1) {
-    throw new Error("This form is not at HoD/Section Head stage.");
+    throw new Error("This request is not in the expected stage for this action.");
   }
 
   await rejectIdentityCardStage({
@@ -163,33 +281,41 @@ export async function rejectIdentityCardByHodOrSectionHead(
     approverRoleLabel: "HoD/Section Head",
     remark: remark.trim(),
   });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
   revalidatePath(`/dashboard/identity-card/${submissionId}`);
-  revalidatePath("/dashboard/identity-card/hod-section-head");
+  revalidatePath("/dashboard/identity-card");
   revalidatePath(`/forms/identity-card/${submissionId}`);
 }
 
-export async function approveIdentityCardByDeputyRegistrar(
+export async function approveIdentityCardByEstablishment(
   submissionId: string,
   approverName: string
 ) {
-  const user = await requireRole(["ESTABLISHMENT", "SYSTEM_ADMIN"]);
-
-  const form = await getIdentityCardFormById(submissionId);
-  if (!form) {
-    throw new Error("Identity card form not found.");
-  }
-  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
-    throw new Error("This request is already finalized.");
-  }
+  const { form, user, activeRole, workflow, isSystemAdmin } =
+    await resolveIdentityCardActionContext(submissionId);
   if (form.currentStage !== 2) {
-    throw new Error("This form is not at Deputy Registrar stage.");
+    throw new Error("This request is not in the expected stage for this action.");
+  }
+
+  const finalizeStage = await shouldFinalizeIdentityCardStageApproval({
+    submissionId,
+    stageNumber: form.currentStage,
+    activeRole,
+    isSystemAdmin,
+    workflow,
+    user,
+  });
+  if (!finalizeStage) {
+    revalidatePath(`/dashboard/identity-card/${submissionId}`);
+    revalidatePath("/dashboard/identity-card");
+    return;
   }
 
   const workflowUserId = await resolveWorkflowUserIdForActor({
     email: user.email,
     fullName: user.fullName ?? null,
-    role: user.role,
+    role: activeRole,
   });
 
   await approveIdentityCardStage2({
@@ -197,53 +323,45 @@ export async function approveIdentityCardByDeputyRegistrar(
     approverName: approverName.trim(),
     approverWorkflowUserId: workflowUserId,
   });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
   revalidatePath(`/dashboard/identity-card/${submissionId}`);
-  revalidatePath("/dashboard/identity-card/deputy-registrar");
-  revalidatePath("/dashboard/identity-card/registrar");
-  revalidatePath("/dashboard/identity-card/dean-faa");
+  revalidatePath("/dashboard/identity-card");
   revalidatePath(`/forms/identity-card/${submissionId}`);
 }
 
-export async function rejectIdentityCardByDeputyRegistrar(
+export async function rejectIdentityCardByEstablishment(
   submissionId: string,
   approverName: string,
   remark: string
 ) {
-  const user = await requireRole(["ESTABLISHMENT", "SYSTEM_ADMIN"]);
-
   if (!remark.trim()) {
     throw new Error("Rejection remark is required.");
   }
 
-  const form = await getIdentityCardFormById(submissionId);
-  if (!form) {
-    throw new Error("Identity card form not found.");
-  }
-  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
-    throw new Error("This request is already finalized.");
-  }
+  const { form, user, activeRole } = await resolveIdentityCardActionContext(submissionId);
   if (form.currentStage !== 2) {
-    throw new Error("This form is not at Deputy Registrar stage.");
+    throw new Error("This request is not in the expected stage for this action.");
   }
 
   const workflowUserId = await resolveWorkflowUserIdForActor({
     email: user.email,
     fullName: user.fullName ?? null,
-    role: user.role,
+    role: activeRole,
   });
 
   await rejectIdentityCardStage({
     submissionId,
     stageNumber: 2,
     approverName: approverName.trim(),
-    approverRoleLabel: "Deputy Registrar",
+    approverRoleLabel: "Establishment",
     remark: remark.trim(),
     approverWorkflowUserId: workflowUserId,
   });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
   revalidatePath(`/dashboard/identity-card/${submissionId}`);
-  revalidatePath("/dashboard/identity-card/deputy-registrar");
+  revalidatePath("/dashboard/identity-card");
   revalidatePath(`/forms/identity-card/${submissionId}`);
 }
 
@@ -251,36 +369,47 @@ export async function approveIdentityCardByRegistrarOrDean(
   submissionId: string,
   approverName: string
 ) {
-  const user = await requireRole(["REGISTRAR", "DEAN_FAA", "SYSTEM_ADMIN"]);
-
-  const form = await getIdentityCardFormById(submissionId);
-  if (!form) {
-    throw new Error("Identity card form not found.");
-  }
-  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
-    throw new Error("This request is already finalized.");
-  }
+  const { form, user, activeRole, workflow, isSystemAdmin } =
+    await resolveIdentityCardActionContext(submissionId);
   if (form.currentStage !== 3) {
-    throw new Error("This form is not at Registrar/Dean FA&A stage.");
+    throw new Error("This request is not in the expected stage for this action.");
+  }
+
+  const finalizeStage = await shouldFinalizeIdentityCardStageApproval({
+    submissionId,
+    stageNumber: form.currentStage,
+    activeRole,
+    isSystemAdmin,
+    workflow,
+    user,
+  });
+  if (!finalizeStage) {
+    revalidatePath(`/dashboard/identity-card/${submissionId}`);
+    revalidatePath("/dashboard/identity-card");
+    return;
   }
 
   const workflowUserId = await resolveWorkflowUserIdForActor({
     email: user.email,
     fullName: user.fullName ?? null,
-    role: user.role,
+    role: activeRole,
   });
 
   await approveIdentityCardStage3({
     submissionId,
     approverName: approverName.trim(),
     approverRoleLabel:
-      user.role === "DEAN_FAA" ? "Dean FA&A" : user.role === "REGISTRAR" ? "Registrar" : "System Admin",
+      activeRole === "DEAN_FAA"
+        ? "Dean"
+        : activeRole === "REGISTRAR"
+          ? "Registrar"
+          : "System Admin",
     approverWorkflowUserId: workflowUserId,
   });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
   revalidatePath(`/dashboard/identity-card/${submissionId}`);
-  revalidatePath("/dashboard/identity-card/registrar");
-  revalidatePath("/dashboard/identity-card/dean-faa");
+  revalidatePath("/dashboard/identity-card");
   revalidatePath(`/forms/identity-card/${submissionId}`);
 }
 
@@ -289,27 +418,19 @@ export async function rejectIdentityCardByRegistrarOrDean(
   approverName: string,
   remark: string
 ) {
-  const user = await requireRole(["REGISTRAR", "DEAN_FAA", "SYSTEM_ADMIN"]);
-
   if (!remark.trim()) {
     throw new Error("Rejection remark is required.");
   }
 
-  const form = await getIdentityCardFormById(submissionId);
-  if (!form) {
-    throw new Error("Identity card form not found.");
-  }
-  if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
-    throw new Error("This request is already finalized.");
-  }
+  const { form, user, activeRole } = await resolveIdentityCardActionContext(submissionId);
   if (form.currentStage !== 3) {
-    throw new Error("This form is not at Registrar/Dean FA&A stage.");
+    throw new Error("This request is not in the expected stage for this action.");
   }
 
   const workflowUserId = await resolveWorkflowUserIdForActor({
     email: user.email,
     fullName: user.fullName ?? null,
-    role: user.role,
+    role: activeRole,
   });
 
   await rejectIdentityCardStage({
@@ -317,14 +438,101 @@ export async function rejectIdentityCardByRegistrarOrDean(
     stageNumber: 3,
     approverName: approverName.trim(),
     approverRoleLabel:
-      user.role === "DEAN_FAA" ? "Dean FA&A" : user.role === "REGISTRAR" ? "Registrar" : "System Admin",
+      activeRole === "DEAN_FAA"
+        ? "Dean"
+        : activeRole === "REGISTRAR"
+          ? "Registrar"
+          : "System Admin",
     remark: remark.trim(),
     approverWorkflowUserId: workflowUserId,
   });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
 
   revalidatePath(`/dashboard/identity-card/${submissionId}`);
-  revalidatePath("/dashboard/identity-card/registrar");
-  revalidatePath("/dashboard/identity-card/dean-faa");
+  revalidatePath("/dashboard/identity-card");
+  revalidatePath(`/forms/identity-card/${submissionId}`);
+}
+
+export async function approveIdentityCardAtCurrentStage(
+  submissionId: string,
+  approverName: string
+) {
+  const { form, user, activeRole, workflow, isSystemAdmin } =
+    await resolveIdentityCardActionContext(submissionId);
+
+  if (!approverName.trim()) {
+    throw new Error("Approver name is required.");
+  }
+
+  const finalizeStage = await shouldFinalizeIdentityCardStageApproval({
+    submissionId,
+    stageNumber: form.currentStage,
+    activeRole,
+    isSystemAdmin,
+    workflow,
+    user,
+  });
+  if (!finalizeStage) {
+    revalidatePath(`/dashboard/identity-card/${submissionId}`);
+    revalidatePath("/dashboard/identity-card");
+    return;
+  }
+
+  const nextStage = getNextStage(workflow, form.currentStage);
+  const workflowUserId =
+    form.currentStage >= 2
+      ? await resolveWorkflowUserIdForActor({
+          email: user.email,
+          fullName: user.fullName ?? null,
+          role: activeRole,
+        })
+      : undefined;
+
+  await approveIdentityCardAtStage({
+    submissionId,
+    stageNumber: form.currentStage,
+    nextStage: nextStage ?? form.currentStage,
+    markApproved: nextStage === null,
+    recommendationText: `${activeRole}: ${approverName.trim()} | Approved`,
+    approverName: approverName.trim(),
+    approverWorkflowUserId: workflowUserId,
+  });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
+
+  revalidatePath(`/dashboard/identity-card/${submissionId}`);
+  revalidatePath("/dashboard/identity-card");
+  revalidatePath(`/forms/identity-card/${submissionId}`);
+}
+
+export async function rejectIdentityCardAtCurrentStage(
+  submissionId: string,
+  approverName: string,
+  remark: string
+) {
+  if (!remark.trim()) {
+    throw new Error("Rejection remark is required.");
+  }
+
+  const { form, user, activeRole } = await resolveIdentityCardActionContext(submissionId);
+  const workflowUserId =
+    form.currentStage >= 2
+      ? await resolveWorkflowUserIdForActor({
+          email: user.email,
+          fullName: user.fullName ?? null,
+          role: activeRole,
+        })
+      : undefined;
+
+  await rejectIdentityCardAtStage({
+    submissionId,
+    stageNumber: form.currentStage,
+    recommendationText: `Rejected by ${activeRole}: ${approverName.trim()} | ${remark.trim()}`,
+    approverWorkflowUserId: workflowUserId,
+  });
+  await clearStageRoleApprovals(submissionId, form.currentStage);
+
+  revalidatePath(`/dashboard/identity-card/${submissionId}`);
+  revalidatePath("/dashboard/identity-card");
   revalidatePath(`/forms/identity-card/${submissionId}`);
 }
 
@@ -333,14 +541,9 @@ export async function bulkReviewIdentityCardForms(input: {
   decision: "approve" | "reject";
   approverName: string;
   remark: string;
-  stage: 1 | 2 | 3;
+  stage: number;
 }) {
-  const user =
-    input.stage === 1
-      ? await requireRole(["HOD", "SECTION_HEAD", "SYSTEM_ADMIN"])
-      : input.stage === 2
-        ? await requireRole(["ESTABLISHMENT", "SYSTEM_ADMIN"])
-        : await requireRole(["REGISTRAR", "DEAN_FAA", "SYSTEM_ADMIN"]);
+  const { user, activeRole, isSystemAdmin, workflow } = await assertIdentityCardBulkStageAccess(input.stage);
 
   const ids = input.submissionIds.filter(Boolean);
   if (ids.length === 0) {
@@ -358,7 +561,7 @@ export async function bulkReviewIdentityCardForms(input: {
       ? await resolveWorkflowUserIdForActor({
           email: user.email,
           fullName: user.fullName ?? null,
-          role: user.role,
+          role: activeRole,
         })
       : undefined;
 
@@ -373,11 +576,24 @@ export async function bulkReviewIdentityCardForms(input: {
 
     if (input.stage === 1) {
       if (input.decision === "approve") {
+        const finalizeStage = await shouldFinalizeIdentityCardStageApproval({
+          submissionId,
+          stageNumber: form.currentStage,
+          activeRole,
+          isSystemAdmin,
+          workflow,
+          user,
+        });
+        if (!finalizeStage) {
+          continue;
+        }
+
         await approveIdentityCardStage1({
           submissionId,
           approverName: input.approverName,
-          approverRoleLabel: user.role === "SECTION_HEAD" ? "Section Head" : "HoD",
+          approverRoleLabel: activeRole === "SECTION_HEAD" ? "Section Head" : "HoD",
         });
+        await clearStageRoleApprovals(submissionId, form.currentStage);
       } else {
         await rejectIdentityCardStage({
           submissionId,
@@ -386,53 +602,123 @@ export async function bulkReviewIdentityCardForms(input: {
           approverRoleLabel: "HoD/Section Head",
           remark: input.remark,
         });
+        await clearStageRoleApprovals(submissionId, form.currentStage);
       }
     }
 
     if (input.stage === 2) {
       if (input.decision === "approve") {
+        const finalizeStage = await shouldFinalizeIdentityCardStageApproval({
+          submissionId,
+          stageNumber: form.currentStage,
+          activeRole,
+          isSystemAdmin,
+          workflow,
+          user,
+        });
+        if (!finalizeStage) {
+          continue;
+        }
+
         await approveIdentityCardStage2({
           submissionId,
           approverName: input.approverName,
           approverWorkflowUserId: workflowUserId!,
         });
+        await clearStageRoleApprovals(submissionId, form.currentStage);
       } else {
         await rejectIdentityCardStage({
           submissionId,
           stageNumber: 2,
           approverName: input.approverName,
-          approverRoleLabel: "Establishment / Deputy Registrar",
+          approverRoleLabel: "Establishment",
           remark: input.remark,
           approverWorkflowUserId: workflowUserId,
         });
+        await clearStageRoleApprovals(submissionId, form.currentStage);
       }
     }
 
     if (input.stage === 3) {
       if (input.decision === "approve") {
+        const finalizeStage = await shouldFinalizeIdentityCardStageApproval({
+          submissionId,
+          stageNumber: form.currentStage,
+          activeRole,
+          isSystemAdmin,
+          workflow,
+          user,
+        });
+        if (!finalizeStage) {
+          continue;
+        }
+
         await approveIdentityCardStage3({
           submissionId,
           approverName: input.approverName,
           approverRoleLabel:
-            user.role === "DEAN_FAA" ? "Dean FA&A" : user.role === "REGISTRAR" ? "Registrar" : "System Admin",
+            activeRole === "DEAN_FAA"
+              ? "Dean"
+              : activeRole === "REGISTRAR"
+                ? "Registrar"
+                : "System Admin",
           approverWorkflowUserId: workflowUserId!,
         });
+        await clearStageRoleApprovals(submissionId, form.currentStage);
       } else {
         await rejectIdentityCardStage({
           submissionId,
           stageNumber: 3,
           approverName: input.approverName,
           approverRoleLabel:
-            user.role === "DEAN_FAA" ? "Dean FA&A" : user.role === "REGISTRAR" ? "Registrar" : "System Admin",
+            activeRole === "DEAN_FAA"
+              ? "Dean"
+              : activeRole === "REGISTRAR"
+                ? "Registrar"
+                : "System Admin",
           remark: input.remark,
           approverWorkflowUserId: workflowUserId,
         });
+        await clearStageRoleApprovals(submissionId, form.currentStage);
+      }
+    }
+
+    if (input.stage > 3) {
+      const nextStage = getNextStage(workflow, form.currentStage);
+      if (input.decision === "approve") {
+        const finalizeStage = await shouldFinalizeIdentityCardStageApproval({
+          submissionId,
+          stageNumber: form.currentStage,
+          activeRole,
+          isSystemAdmin,
+          workflow,
+          user,
+        });
+        if (!finalizeStage) {
+          continue;
+        }
+
+        await approveIdentityCardAtStage({
+          submissionId,
+          stageNumber: form.currentStage,
+          nextStage: nextStage ?? form.currentStage,
+          markApproved: nextStage === null,
+          recommendationText: `${activeRole}: ${input.approverName} | ${input.remark}`,
+          approverName: input.approverName,
+          approverWorkflowUserId: workflowUserId,
+        });
+        await clearStageRoleApprovals(submissionId, form.currentStage);
+      } else {
+        await rejectIdentityCardAtStage({
+          submissionId,
+          stageNumber: form.currentStage,
+          recommendationText: `Rejected by ${activeRole}: ${input.approverName} | ${input.remark}`,
+          approverWorkflowUserId: workflowUserId,
+        });
+        await clearStageRoleApprovals(submissionId, form.currentStage);
       }
     }
   }
 
-  revalidatePath("/dashboard/identity-card/hod-section-head");
-  revalidatePath("/dashboard/identity-card/deputy-registrar");
-  revalidatePath("/dashboard/identity-card/registrar");
-  revalidatePath("/dashboard/identity-card/dean-faa");
+  revalidatePath("/dashboard/identity-card");
 }

@@ -1,4 +1,5 @@
-import { requireUser } from "@/lib/auth";
+import { requireUser, toDisplayRole } from "@/lib/auth";
+import { getWorkflow, getWorkflowStageRoleCodes } from "@/lib/workflow-engine";
 import { uploadMissingVehicleStickerAttachments } from "@/app/actions/vehicle-sticker";
 import {
   getVehicleStickerFormById,
@@ -10,14 +11,19 @@ import {
   getVehicleStickerStatusText,
 } from "@/lib/vehicle-sticker-status";
 import { notFound, redirect } from "next/navigation";
+import { PrintButton } from "@/components/ui/print-button";
 
 export default async function VehicleStickerStatusPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ embed?: string }>;
 }) {
   const user = await requireUser();
   const { id } = await params;
+  const { embed } = await searchParams;
+  const isEmbedMode = embed === "1" || embed === "true";
   const form = await getVehicleStickerFormById(id);
 
   if (!form) notFound();
@@ -36,12 +42,15 @@ export default async function VehicleStickerStatusPage({
   const attachments = await listVehicleStickerAttachmentsBySubmissionId(id);
   const isOwner = form.submittedByEmail.toLowerCase() === user.email.toLowerCase();
 
-  const stageFlow = [
-    { stage: 1, label: "Supervisor Recommendation" },
-    { stage: 2, label: "HoD Recommendation" },
-    { stage: 3, label: "Student Affairs" },
-    { stage: 4, label: "Security Office Issuance" },
-  ];
+  const workflow = await getWorkflow("vehicle-sticker");
+  const stageFlow = workflow?.stages.map((stage) => ({
+    stage: stage.stage,
+    label: toDisplayRole(stage.role as any),
+  })) ?? [];
+  const securityStageNumbers =
+    workflow?.stages
+      .filter((stage) => getWorkflowStageRoleCodes(stage).includes("SECURITY_OFFICE"))
+      .map((stage) => stage.stage) ?? [];
 
   const attachmentLabel: Record<VehicleStickerAttachmentRecord["documentType"], string> = {
     passport_photo: "Applicant Photo",
@@ -70,11 +79,17 @@ export default async function VehicleStickerStatusPage({
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-10">
+      {isEmbedMode ? (
+        <style>{`.print-hidden{display:none!important;}.app-content{padding-top:0!important;}`}</style>
+      ) : null}
       <div className="mx-auto max-w-4xl space-y-6">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-indigo-600">IIT Ropar — Vehicle Sticker</p>
-          <h1 className="mt-1 text-2xl font-bold text-slate-900">Application Status</h1>
-          <p className="mt-1 text-sm text-slate-500">Reference ID: {form.submissionId}</p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-indigo-600">IIT Ropar — Vehicle Sticker</p>
+            <h1 className="mt-1 text-2xl font-bold text-slate-900">Application Status</h1>
+            <p className="mt-1 text-sm text-slate-500">Reference ID: {form.submissionId}</p>
+          </div>
+          {!isEmbedMode ? <PrintButton /> : null}
         </div>
 
         <div className={`rounded-xl px-5 py-4 ${getVehicleStickerStatusBadgeClass(form)}`}>
@@ -122,6 +137,32 @@ export default async function VehicleStickerStatusPage({
                   {stageApproval?.recommendationText && (
                     <p className="mt-1 text-slate-500">Remark: {stageApproval.recommendationText}</p>
                   )}
+                  {securityStageNumbers.includes(stage.stage) &&
+                  (form.issuedStickerNo || form.stickerValidUpto || form.securityIssueDate) ? (
+                    <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-900">
+                      {form.issuedStickerNo ? (
+                        <p>
+                          Sticker Number: <span className="font-semibold">{form.issuedStickerNo}</span>
+                        </p>
+                      ) : null}
+                      {form.stickerValidUpto ? (
+                        <p>
+                          Valid Upto:{" "}
+                          <span className="font-semibold">
+                            {new Date(form.stickerValidUpto).toLocaleDateString("en-IN")}
+                          </span>
+                        </p>
+                      ) : null}
+                      {form.securityIssueDate ? (
+                        <p>
+                          Issue Date:{" "}
+                          <span className="font-semibold">
+                            {new Date(form.securityIssueDate).toLocaleDateString("en-IN")}
+                          </span>
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </li>
               );
             })}

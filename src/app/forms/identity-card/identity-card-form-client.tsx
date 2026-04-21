@@ -18,7 +18,7 @@ export function IdentityCardFormClient({
     return normalized === "temporary" || normalized === "on contract";
   }, [employmentType]);
 
-  const requiresPreviousCardValidity = cardType === "renewal";
+  const requiresRenewalOrDuplicateFields = cardType === "renewal" || cardType === "duplicate";
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-10">
@@ -107,7 +107,14 @@ export function IdentityCardFormClient({
               </div>
               <div className="sm:col-span-2">
                 <label className="label">Email ID *</label>
-                <input name="emailId" type="email" required className="input" defaultValue={userEmail} />
+                <input
+                  name="emailId"
+                  type="email"
+                  required
+                  className="input bg-slate-100 text-slate-600"
+                  value={userEmail}
+                  readOnly
+                />
               </div>
             </div>
           </section>
@@ -131,13 +138,18 @@ export function IdentityCardFormClient({
                 </select>
               </div>
               <div>
-                <label className="label">Previous Card Validity {requiresPreviousCardValidity ? "*" : ""}</label>
-                <input name="previousCardValidity" className="input" required={requiresPreviousCardValidity} />
-                <p className="mt-1 text-xs text-slate-500">Mandatory when card type is Renewal.</p>
+                <label className="label">Previous Card Validity {requiresRenewalOrDuplicateFields ? "*" : ""}</label>
+                <input
+                  name="previousCardValidity"
+                  type="date"
+                  className="input"
+                  required={requiresRenewalOrDuplicateFields}
+                />
+                <p className="mt-1 text-xs text-slate-500">Mandatory when card type is Renewal or Duplicate.</p>
               </div>
               <div className="sm:col-span-2">
                 <label className="label">Reason (required for renewal/duplicate)</label>
-                <textarea name="reasonForRenewal" className="input h-20" />
+                <textarea name="reasonForRenewal" className="input h-20" required={requiresRenewalOrDuplicateFields} />
               </div>
             </div>
           </section>
@@ -151,7 +163,13 @@ export function IdentityCardFormClient({
               </div>
               <div>
                 <label className="label">Previous ID Card Copy (required for renewal/duplicate)</label>
-                <input name="previousIdCard" type="file" accept="image/*,.pdf" className="input" />
+                <input
+                  name="previousIdCard"
+                  type="file"
+                  accept="image/*,.pdf"
+                  className="input"
+                  required={requiresRenewalOrDuplicateFields}
+                />
               </div>
             </div>
           </section>

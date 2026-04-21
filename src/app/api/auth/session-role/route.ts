@@ -13,7 +13,7 @@ export async function GET() {
     {
       authenticated: true,
       role: user.role,
-      dashboardPath: user.role === "SYSTEM_ADMIN" ? "/admin" : getDashboardPathForRole(user.role),
+      dashboardPath: user.role === "SYSTEM_ADMIN" ? "/admin" : await getDashboardPathForRole(user.role),
     },
     {
       headers: {

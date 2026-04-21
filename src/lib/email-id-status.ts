@@ -25,9 +25,22 @@ export function getEmailFormStatusText(input: {
     return "Completed - Email issued";
   }
 
-  const stage1 = input.approvals?.find((approval) => approval.stage === 1);
-  if (stage1?.forwardingSection) {
-    return `Pending - Signed by ${getForwardingSectionLabel(stage1.forwardingSection)}`;
+  const latestApproval = (input.approvals ?? []).reduce<EmailIdApprovalRecord | null>(
+    (acc, approval) => {
+      if (!acc) {
+        return approval;
+      }
+      return approval.stage > acc.stage ? approval : acc;
+    },
+    null
+  );
+
+  if (latestApproval?.forwardingSection) {
+    return `Pending - Signed by ${getForwardingSectionLabel(latestApproval.forwardingSection)}`;
+  }
+
+  if (latestApproval) {
+    return `Pending - Stage ${latestApproval.stage} approved`;
   }
 
   return "Pending - Submitted";
