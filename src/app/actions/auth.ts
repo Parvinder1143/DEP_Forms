@@ -117,7 +117,10 @@ type OtpLoginState = {
   success?: string;
 };
 
-export async function sendLoginOtp(_prev: OtpLoginState, formData: FormData) {
+export async function sendLoginOtp(
+  _prev: OtpLoginState | undefined,
+  formData: FormData
+): Promise<OtpLoginState> {
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
 
   if (!email) {
@@ -142,7 +145,10 @@ export async function sendLoginOtp(_prev: OtpLoginState, formData: FormData) {
   }
 }
 
-export async function signInWithOtp(_prev: OtpLoginState, formData: FormData) {
+export async function signInWithOtp(
+  _prev: OtpLoginState | undefined,
+  formData: FormData
+): Promise<OtpLoginState> {
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const otp = String(formData.get("otp") ?? "").trim();
   const isStudentRequest = String(formData.get("isStudentRequest") ?? "") === "on";
@@ -181,6 +187,8 @@ export async function signInWithOtp(_prev: OtpLoginState, formData: FormData) {
 
     return { error: (error as Error).message || "Unable to sign in." };
   }
+
+  return { error: "Unable to sign in." };
 }
 
 export async function sendPasswordResetOtp(_prev: PasswordResetState, formData: FormData) {

@@ -27,7 +27,7 @@ export function SignInForm({ initialMode = "login", showModeToggle = true }: Sig
   const [showStudentPrompt, setShowStudentPrompt] = useState(false);
 
   const [state, formAction, pending] = useActionState(
-    async (_prev: { error?: string }, formData: FormData) => signInWithEmail(formData),
+    async (_prev: { error?: string } | undefined, formData: FormData) => signInWithEmail(formData),
     initialState
   );
 

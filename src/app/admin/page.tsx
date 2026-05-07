@@ -1,6 +1,7 @@
 import { approveAllPendingStudentRoles, assignRole } from "@/app/actions/auth";
 import { isInstituteEmail, requireRole, toDisplayRole } from "@/lib/auth";
 import Link from "next/link";
+import { BulkUserUploadClient } from "@/components/admin/bulk-user-upload-client";
 import { getEmailFormStatusText } from "@/lib/email-id-status";
 import {
   listEmailIdForms,
@@ -564,6 +565,8 @@ export default async function AdminPage({
                     Approve all student requests
                   </button>
                 </form>
+
+                <BulkUserUploadClient />
 
                 <form action="/admin" method="get" className="mb-4 flex items-center gap-2">
                   <input type="hidden" name="tab" value="role-requests" />

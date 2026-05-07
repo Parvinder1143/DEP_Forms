@@ -2,7 +2,7 @@
 
 import { useTransition, useState } from "react";
 import { updateWorkflowStages } from "@/app/actions/admin-workflows";
-import type { ActiveDelegationRecord } from "@/lib/delegation-store";
+import type { ActiveDelegationRecord, DelegationQueueKey } from "@/lib/delegation-store";
 
 const ROLE_LABELS: Record<string, string> = {
   STUDENT: "Student",
@@ -283,11 +283,15 @@ export function WorkflowEditor({
                     .map((r: string) => r.trim().toUpperCase())
                     .filter(Boolean);
 
+                  const workflowQueueKey = Object.prototype.hasOwnProperty.call(queueLabelByKey, workflow.id)
+                    ? (workflow.id as keyof typeof queueLabelByKey)
+                    : null;
+
                   const matches = roleCodes.flatMap((roleCode: string) => activeDelegationsByRole.get(roleCode) ?? []);
                   const uniqueMatches = Array.from(new Map(matches.map((d) => [d.id, d])).values()).filter((d) => {
                     const hasQueueMappings = Object.keys(d.queueDelegations).length > 0;
                     if (hasQueueMappings) {
-                      return Boolean(d.queueDelegations[workflow.id]);
+                      return workflowQueueKey ? Boolean(d.queueDelegations[workflowQueueKey as DelegationQueueKey]) : false;
                     }
                     return Boolean(d.replacementName || d.replacementEmail);
                   });
@@ -296,15 +300,19 @@ export function WorkflowEditor({
                   return (
                     <div className="mt-2 space-y-1 text-left w-full">
                       {uniqueMatches.slice(0, 2).map((d) => {
-                        const workflowQueueDetail = d.queueDetails.find((detail) => detail.queueKey === workflow.id);
-                        const workflowQueueUserId = d.queueDelegations[workflow.id];
+                        const workflowQueueDetail = workflowQueueKey
+                          ? d.queueDetails.find((detail) => detail.queueKey === workflowQueueKey)
+                          : undefined;
+                        const workflowQueueUserId = workflowQueueKey
+                          ? d.queueDelegations[workflowQueueKey as DelegationQueueKey]
+                          : undefined;
                         const displayEndDate = workflowQueueDetail?.hasOverride && workflowQueueDetail.overrideEndsAt
                           ? new Date(workflowQueueDetail.overrideEndsAt)
                           : new Date(d.endsAt);
 
                         const workflowSpecificTarget = workflowQueueDetail
                           ? (() => {
-                              const queueLabel = queueLabelByKey[workflow.id] ?? workflow.id;
+                              const queueLabel = workflowQueueKey ? queueLabelByKey[workflowQueueKey as DelegationQueueKey] : workflow.id;
                               const originalLabel =
                                 delegatedUserLabelById[workflowQueueDetail.originalUserId] ?? workflowQueueDetail.originalUserId;
                               const effectiveLabel = workflowQueueDetail.effectiveUserId
@@ -325,7 +333,7 @@ export function WorkflowEditor({
                               return `${queueLabel}: ${effectiveLabel}`;
                             })()
                           : workflowQueueUserId
-                            ? `${queueLabelByKey[workflow.id] ?? workflow.id}: ${delegatedUserLabelById[workflowQueueUserId] ?? workflowQueueUserId}`
+                            ? `${workflowQueueKey ? queueLabelByKey[workflowQueueKey as DelegationQueueKey] : workflow.id}: ${delegatedUserLabelById[workflowQueueUserId] ?? workflowQueueUserId}`
                             : null;
 
                         return (

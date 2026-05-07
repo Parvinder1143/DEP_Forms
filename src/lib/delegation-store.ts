@@ -101,6 +101,7 @@ type InMemoryDelegationRow = {
   delegatedRole: AppRole;
   replacementUserId: string | null;
   queueDelegations: DelegationQueueMap;
+  submittedQueueDelegations?: DelegationQueueMap;
   replacementEmail: string | null;
   replacementName: string | null;
   startsAt: Date;
@@ -121,6 +122,31 @@ const mem = globalThis as unknown as {
 };
 
 let schemaReady = false;
+
+function normalizeMemoryRow(row: InMemoryDelegationRow): DelegationRequestRecord {
+  return {
+    id: row.id,
+    requesterUserId: row.requesterUserId,
+    requesterEmail: row.requesterEmail,
+    requesterName: row.requesterName,
+    delegatedRole: row.delegatedRole,
+    replacementUserId: row.replacementUserId,
+    queueDelegations: row.queueDelegations,
+    submittedQueueDelegations: row.submittedQueueDelegations ?? row.queueDelegations,
+    replacementEmail: row.replacementEmail,
+    replacementName: row.replacementName,
+    startsAt: row.startsAt,
+    endsAt: row.endsAt,
+    reason: row.reason,
+    status: row.status,
+    adminRemarks: row.adminRemarks,
+    decidedAt: row.decidedAt,
+    decidedByUserId: row.decidedByUserId,
+    decidedByName: row.decidedByName,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
 
 function hasDatabaseUrl() {
   return Boolean(process.env.DATABASE_URL);
@@ -472,6 +498,7 @@ export async function createDelegationRequest(input: {
       delegatedRole: input.requesterRole,
       replacementUserId: input.replacementUserId ?? null,
       queueDelegations: sanitizedQueueDelegations,
+      submittedQueueDelegations: sanitizedQueueDelegations,
       replacementEmail: null,
       replacementName: null,
       startsAt: input.startsAt,
@@ -531,7 +558,8 @@ export async function listDelegationRequestsForRequester(requesterUserId: string
   if (!hasDatabaseUrl()) {
     return getMemoryStore()
       .filter((row) => row.requesterUserId === requesterUserId)
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .map((row) => normalizeMemoryRow(row));
   }
 
   await ensureDelegationSchema();
@@ -576,7 +604,9 @@ export async function listDelegationRequestsForRequester(requesterUserId: string
 
 export async function listDelegationRequestsForAdmin() {
   if (!hasDatabaseUrl()) {
-    return getMemoryStore().sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return getMemoryStore()
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .map((row) => normalizeMemoryRow(row));
   }
 
   await ensureDelegationSchema();
