@@ -147,6 +147,18 @@ CREATE TYPE notification_channel AS ENUM (
 -- ================================================================
 
 -- ----------------------------------------------------------------
+-- departments
+-- Maps a department name to its HOD email for routing
+-- ----------------------------------------------------------------
+CREATE TABLE departments (
+	id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+	name              TEXT        NOT NULL UNIQUE,
+	hod_email         TEXT        NOT NULL,
+	created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ----------------------------------------------------------------
 -- users
 -- Single table for every person who interacts with the system.
 -- Linked to Supabase Auth via auth_id (uuid from auth.users).
@@ -763,6 +775,10 @@ CREATE TRIGGER trg_users_updated_at
 	BEFORE UPDATE ON users
 	FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
 
+CREATE TRIGGER trg_departments_updated_at
+	BEFORE UPDATE ON departments
+	FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
+
 CREATE TRIGGER trg_submissions_updated_at
 	BEFORE UPDATE ON form_submissions
 	FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
@@ -771,6 +787,7 @@ CREATE TRIGGER trg_submissions_updated_at
 -- SECTION 8 — ROW LEVEL SECURITY (RLS)
 -- ================================================================
 
+ALTER TABLE departments               ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users                     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE role_assignments          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE form_stage_config         ENABLE ROW LEVEL SECURITY;

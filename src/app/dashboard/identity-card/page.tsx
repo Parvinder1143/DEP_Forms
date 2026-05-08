@@ -21,6 +21,7 @@ import { bulkReviewIdentityCardForms } from "@/app/actions/identity-card";
 import { BulkReviewGrid } from "@/components/stakeholder/bulk-review-grid";
 import { StakeholderDashboardScaffold } from "@/components/stakeholder/dashboard-scaffold";
 import { QueueToggleClient } from "@/components/stakeholder/queue-toggle-client";
+import { listDepartments } from "@/lib/department-store";
 
 export default async function GenericIdentityCardDashboardPage() {
   const user = await requireUser();
@@ -58,7 +59,11 @@ export default async function GenericIdentityCardDashboardPage() {
     redirect("/");
   }
 
-  const filterDept = null;
+  let filterDept: string[] | null = null;
+  if (activeRole === "HOD") {
+    const departments = await listDepartments();
+    filterDept = departments.filter((d) => d.hodEmail === user.email).map((d) => d.name);
+  }
 
   // We fetch actionable forms dynamically based on the stages evaluated from the workflow
   const actionableForms = await listActionableIdentityCardForms(activeRole, filterDept);

@@ -24,6 +24,7 @@ import { BulkReviewGrid } from "@/components/stakeholder/bulk-review-grid";
 import { StakeholderDashboardScaffold } from "@/components/stakeholder/dashboard-scaffold";
 import { QueueToggleClient } from "@/components/stakeholder/queue-toggle-client";
 import { redirect } from "next/navigation";
+import { listDepartments } from "@/lib/department-store";
 
 export default async function GenericVehicleStickerDashboardPage() {
   const user = await requireUser();
@@ -60,7 +61,11 @@ export default async function GenericVehicleStickerDashboardPage() {
     redirect("/");
   }
 
-  const filterDept = null;
+  let filterDept: string[] | null = null;
+  if (activeRole === "HOD") {
+    const departments = await listDepartments();
+    filterDept = departments.filter((d) => d.hodEmail === user.email).map((d) => d.name);
+  }
 
   const allInProgressForms = await listVehicleStickerOngoingForms(filterDept);
   const completedForms = await listVehicleStickerCompletedForms(filterDept);

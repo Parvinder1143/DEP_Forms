@@ -21,6 +21,7 @@ import { getWorkflowStageMode } from "@/lib/workflow-engine";
 import { BulkReviewGrid } from "@/components/stakeholder/bulk-review-grid";
 import { StakeholderDashboardScaffold } from "@/components/stakeholder/dashboard-scaffold";
 import { QueueToggleClient } from "@/components/stakeholder/queue-toggle-client";
+import { listDepartments } from "@/lib/department-store";
 
 export default async function GenericGuestHouseDashboardPage() {
   const user = await requireUser();
@@ -57,8 +58,14 @@ export default async function GenericGuestHouseDashboardPage() {
     redirect("/");
   }
 
-  const actionableForms = await listActionableGuestHouseForms(activeRole);
-  const allInProgressForms = await listGuestHouseOngoingForms();
+  let filterDept: string[] | null = null;
+  if (activeRole === "HOD") {
+    const departments = await listDepartments();
+    filterDept = departments.filter((d) => d.hodEmail === user.email).map((d) => d.name);
+  }
+
+  const actionableForms = await listActionableGuestHouseForms(activeRole, filterDept);
+  const allInProgressForms = await listGuestHouseOngoingForms(filterDept);
 
   const roleStageApprovals = await listRoleStageApprovalsForSubmissions(
     activeRole,
@@ -94,7 +101,7 @@ export default async function GenericGuestHouseDashboardPage() {
       (approval) => validStages.includes(approval.stageNumber) && approval.decision !== "pending"
     );
   });
-  const completedForms = await listGuestHouseCompletedForms();
+  const completedForms = await listGuestHouseCompletedForms(filterDept);
 
   const currentStagePendingCount = pendingForms.length;
 

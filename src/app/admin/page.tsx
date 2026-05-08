@@ -1,7 +1,6 @@
-import { approveAllPendingStudentRoles, assignRole } from "@/app/actions/auth";
+import { assignRole } from "@/app/actions/auth";
 import { isInstituteEmail, requireRole, toDisplayRole } from "@/lib/auth";
 import Link from "next/link";
-import { BulkUserUploadClient } from "@/components/admin/bulk-user-upload-client";
 import { getEmailFormStatusText } from "@/lib/email-id-status";
 import {
   listEmailIdForms,
@@ -25,7 +24,6 @@ import {
   type AppRole,
 } from "@/lib/mock-db";
 import { listUsers } from "@/lib/user-store";
-import { isStudentRoleRequestTagged } from "@/lib/user-store";
 import { listWorkflows } from "@/lib/workflow-engine";
 import { getCurrentEmailWorkflowStage } from "@/lib/email-id-workflow";
 import { listCustomRoles } from "@/lib/custom-role-store";
@@ -35,11 +33,15 @@ import { UsersClient } from "./users-client";
 import { ApprovalLogsClient } from "./approval-logs-client";
 import { DelegationRequestsClient } from "./delegation-requests-client";
 import { QueueTabsClient } from "./queue-tabs-client";
+import { RoleRequestsClient } from "./role-requests-client";
+import { DepartmentsClient } from "./departments-client";
+import { listDepartments } from "@/lib/department-store";
 
 const ADMIN_TAB_KEYS: readonly AdminTabKey[] = [
   "role-requests",
   "delegation-requests",
   "users",
+  "departments",
   "email-queue",
   "vehicle-queue",
   "id-card-queue",
@@ -126,10 +128,11 @@ export default async function AdminPage({
   );
 
   const pendingUsers = users.filter((u) => !u.role && isInstituteEmail(u.email));
-  const pendingStudentUsers = pendingUsers.filter((user) => isStudentRoleRequestTagged(user));
   const filteredPendingUsers = pendingUsers.filter((user) =>
     containsSearch(roleSearchQuery, user.email, user.fullName ?? "", toDisplayRole(user.role))
   );
+
+  const departments = await listDepartments();
 
   const emailWorkflow = workflows.find((workflow) => workflow.id === "email-id") ?? null;
   const emailFirstStage = emailWorkflow
@@ -536,110 +539,22 @@ export default async function AdminPage({
           initialTab={activeTab}
           sections={{
             "role-requests": (
-              <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="mb-4 flex items-center justify-between gap-4">
-                  <h2 className="text-3xl font-semibold text-slate-900">User Role Requests</h2>
-                  <p className="text-sm text-slate-500">
-                    Pending role requests: <span className="font-semibold text-slate-800">{filteredPendingUsers.length}</span>
-                  </p>
-                </div>
-
-                <form
-                  action={approveAllPendingStudentRoles}
-                  className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3"
-                >
-                  <div>
-                    <p className="text-sm font-semibold text-emerald-900">Bulk student approval</p>
-                    <p className="text-sm text-emerald-800">
-                      Pending student requests: <span className="font-semibold">{pendingStudentUsers.length}</span>
-                    </p>
-                    <p className="text-xs text-emerald-700">
-                      Assigns Student role to all pending requests tagged as student during login.
-                    </p>
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={pendingStudentUsers.length === 0}
-                    className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    Approve all student requests
-                  </button>
-                </form>
-
-                <BulkUserUploadClient />
-
-                <form action="/admin" method="get" className="mb-4 flex items-center gap-2">
-                  <input type="hidden" name="tab" value="role-requests" />
-                  <input
-                    name="roleSearch"
-                    defaultValue={params.roleSearch ?? ""}
-                    className="input max-w-65"
-                    placeholder="Search role requests"
-                  />
-                  <button type="submit" className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-black">
-                    Search
-                  </button>
-                </form>
-
-                <div className="space-y-3">
-                  {filteredPendingUsers.length === 0 ? (
-                    <p className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                      No pending role requests.
-                    </p>
-                  ) : (
-                    filteredPendingUsers.map((user) => (
-                      <div
-                        key={user.id}
-                        className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-4"
-                      >
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-xl font-semibold text-slate-900">{user.email}</p>
-                          {isStudentRoleRequestTagged(user) ? (
-                            <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-sm font-semibold text-emerald-800">
-                              Student
-                            </span>
-                          ) : null}
-                        </div>
-                        <p className="mt-1 text-sm text-slate-500">
-                          Requested: {new Date(user.createdAt).toLocaleString("en-IN")}
-                        </p>
-                        <div className="mt-3">
-                          <form action={assignRole} className="flex flex-wrap items-center gap-2">
-                            <input type="hidden" name="userId" value={user.id} />
-                            <select
-                              name="role"
-                              defaultValue=""
-                              className="input max-w-65"
-                              required
-                            >
-                              <option value="" disabled>
-                                Select role
-                              </option>
-                              {assignableRoleOptions.map((role) => (
-                                <option key={role} value={role}>
-                                  {toRoleLabel(role)}
-                                </option>
-                              ))}
-                            </select>
-                            <button
-                              type="submit"
-                              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
-                            >
-                              Approve
-                            </button>
-                          </form>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </section>
+              <RoleRequestsClient
+                pendingUsers={filteredPendingUsers}
+                assignableRoleOptions={assignableRoleOptions}
+                customRoleLabels={customRoleLabels}
+                roleSearchQuery={params.roleSearch ?? ""}
+              />
             ),
             "users": (
               <UsersClient
                 initialUsers={users}
+                assignableRoles={assignableRoleOptions}
                 customRoleLabels={customRoleLabels}
               />
+            ),
+            "departments": (
+              <DepartmentsClient departments={departments} />
             ),
             "delegation-requests": (
               <DelegationRequestsClient

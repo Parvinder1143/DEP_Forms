@@ -21,6 +21,7 @@ import { StakeholderDashboardScaffold } from "@/components/stakeholder/dashboard
 import { QueueToggleClient } from "@/components/stakeholder/queue-toggle-client";
 import { BulkReviewGrid } from "@/components/stakeholder/bulk-review-grid";
 import { bulkIssueEmailIds, bulkReviewEmailIdForms } from "@/app/actions/email-id";
+import { listDepartments } from "@/lib/department-store";
 
 export default async function GenericEmailIdDashboard() {
   const user = await requireUser();
@@ -69,6 +70,14 @@ export default async function GenericEmailIdDashboard() {
   for (const form of inProgressForms) {
     if (form.status === "ISSUED" || form.status === "REJECTED") {
       continue;
+    }
+
+    if (activeRole === "HOD") {
+      const departments = await listDepartments();
+      const hodDepartments = departments.filter((d) => d.hodEmail === user.email).map((d) => d.name);
+      if (!hodDepartments.includes(form.department)) {
+        continue;
+      }
     }
 
     const currentStageNumber = getCurrentEmailWorkflowStage(form, emailWorkflow);

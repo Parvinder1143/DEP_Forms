@@ -28,6 +28,7 @@ import {
 } from "@/lib/workflow-stage-approvals";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { checkHodDepartmentAccess } from "@/lib/department-store";
 
 async function getVehicleStickerWorkflowOrThrow() {
   const workflow = await getWorkflow("vehicle-sticker");
@@ -73,6 +74,15 @@ async function resolveVehicleStickerActionContext(submissionId: string) {
     const stages = getStagesForRole(workflow, roleContext.activeRole);
     if (!stages.includes(form.currentStage)) {
       throw new Error("You are not authorized for the current stage.");
+    }
+  }
+
+  if (roleContext.activeRole === "HOD") {
+    if (form.department) {
+      const hasAccess = await checkHodDepartmentAccess(roleContext.user.email, form.department);
+      if (!hasAccess) {
+        throw new Error("You are not authorized to approve requests for this department.");
+      }
     }
   }
 
@@ -720,6 +730,13 @@ export async function bulkReviewVehicleStickerForms(input: {
     const form = await getVehicleStickerFormById(submissionId);
     if (!form || form.overallStatus === "approved" || form.overallStatus === "rejected") {
       continue;
+    }
+
+    if (activeRole === "HOD") {
+      if (form.department) {
+        const hasAccess = await checkHodDepartmentAccess(user.email, form.department);
+        if (!hasAccess) continue;
+      }
     }
 
     if (form.currentStage !== input.stage) {

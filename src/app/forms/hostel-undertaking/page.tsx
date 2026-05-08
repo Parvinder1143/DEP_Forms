@@ -1,10 +1,12 @@
 import { requireApplicantFormAccess } from "@/lib/auth";
 import { submitHostelUndertakingForm } from "@/app/actions/hostel-undertaking";
+import { listDepartments } from "@/lib/department-store";
 
 export default async function HostelUndertakingFormPage() {
   const user = await requireApplicantFormAccess("hostel-undertaking");
   const today = new Date();
   const todayDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const departments = await listDepartments();
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-10">
@@ -33,7 +35,13 @@ export default async function HostelUndertakingFormPage() {
               </div>
               <div>
                 <label className="label">Department *</label>
-                <input name="department" required className="input" />
+                <select name="department" required className="input">
+                  <option value="">Select Department</option>
+                  {departments.map((d) => (
+                    <option key={d.name} value={d.name}>{d.name}</option>
+                  ))}
+                  <option value="Other">Other</option>
+                </select>
               </div>
               <div>
                 <label className="label">Hostel Room No *</label>

@@ -11,7 +11,7 @@ function getTodayLocalDate() {
   return `${year}-${month}-${day}`;
 }
 
-export function VehicleStickerFormClient() {
+export function VehicleStickerFormClient({ departments }: { departments: { name: string }[] }) {
   const [error, setError] = useState<string | null>(null);
   const [declarationDate, setDeclarationDate] = useState("");
   const [isPending, startTransition] = useTransition();
@@ -64,7 +64,13 @@ export function VehicleStickerFormClient() {
               </div>
               <div>
                 <label className="label">Department / Section *</label>
-                <input name="department" required className="input" placeholder="Department" />
+                <select name="department" required className="input">
+                  <option value="">Select</option>
+                  {departments.map((d) => (
+                    <option key={d.name} value={d.name}>{d.name}</option>
+                  ))}
+                  <option value="Other">Other</option>
+                </select>
               </div>
             </div>
 

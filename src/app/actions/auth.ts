@@ -13,7 +13,6 @@ import {
 import type { AppRole } from "@/lib/mock-db";
 import { getActiveDelegatedRoleForUser } from "@/lib/delegation-store";
 import {
-  createCustomRole,
   listCustomRoles,
   normalizeAssignableRoleCode,
 } from "@/lib/custom-role-store";
@@ -22,10 +21,13 @@ import {
   authenticateUser,
   findUserByEmail,
   isStudentRoleRequestTagged,
+  getPreferredRole,
   listUsers,
   setStudentRoleRequestTag,
+  setPreferredRoleForUser,
   updateUserPassword,
   updateUserRole,
+  deleteUser,
 } from "@/lib/user-store";
 import { getSupabaseAdminClient, getSupabaseAnonClient } from "@/lib/supabase";
 import { createLoginOtp, verifyLoginOtp } from "@/lib/otp-store";
@@ -68,6 +70,7 @@ export async function signInWithEmail(formData: FormData) {
   const modeRaw = String(formData.get("mode") ?? "login");
   const mode = modeRaw === "signup" ? "signup" : "login";
   const isStudentRequest = String(formData.get("isStudentRequest") ?? "") === "on";
+  const preferredRole = String(formData.get("preferredRole") ?? "").trim();
 
   if (!email) {
     return { error: "Email is required." };
@@ -97,6 +100,15 @@ export async function signInWithEmail(formData: FormData) {
     ).user;
   } catch (error) {
     return { error: (error as Error).message };
+  }
+
+  // Store preferred role if provided during signup
+  if (mode === "signup" && preferredRole && user) {
+    try {
+      await setPreferredRoleForUser(user.id, preferredRole);
+    } catch (error) {
+      console.error("Failed to store preferred role:", error);
+    }
   }
 
   await finalizeLogin({ user, isStudentRequest });
@@ -313,28 +325,66 @@ export async function assignRole(formData: FormData) {
   revalidatePath("/");
 }
 
-export async function approveAllPendingStudentRoles() {
+export async function approveAllPreferredRoles() {
   await requireRole(["SYSTEM_ADMIN"]);
 
   const users = await listUsers();
-  const taggedPendingUsers = users.filter(
-    (user) => isInstituteEmail(user.email) && isStudentRoleRequestTagged(user)
-  );
+  const customRoles = await listCustomRoles();
+  const allowedRoles = new Set<string>([
+    ...BUILT_IN_ROLE_OPTIONS,
+    ...customRoles.map((customRole) => customRole.roleCode),
+  ]);
 
-  await Promise.all(taggedPendingUsers.map((user) => updateUserRole(user.id, "STUDENT")));
+  const pendingWithPreferred = users.filter((user) => {
+    if (user.role || !isInstituteEmail(user.email)) return false;
+    const prefRole = getPreferredRole(user);
+    return prefRole && allowedRoles.has(prefRole);
+  });
+
+  await Promise.all(
+    pendingWithPreferred.map((user) =>
+      updateUserRole(user.id, getPreferredRole(user) as AppRole)
+    )
+  );
 
   revalidatePath("/admin");
   revalidatePath("/pending-role");
   revalidatePath("/");
 }
 
-export async function createAssignableRole(formData: FormData) {
+export async function bulkAssignRoles(userIds: string[], role: AppRole) {
   await requireRole(["SYSTEM_ADMIN"]);
 
-  const roleCode = String(formData.get("roleCode") ?? "");
-  const displayName = String(formData.get("displayName") ?? "");
+  const customRoles = await listCustomRoles();
+  const allowedRoles = new Set<string>([
+    ...BUILT_IN_ROLE_OPTIONS,
+    ...customRoles.map((customRole) => customRole.roleCode),
+  ]);
 
-  await createCustomRole({ roleCode, displayName });
+  if (!allowedRoles.has(role)) {
+    throw new Error("Invalid role selected.");
+  }
+
+  await Promise.all(userIds.map((id) => updateUserRole(id, role)));
 
   revalidatePath("/admin");
+  revalidatePath("/pending-role");
+  revalidatePath("/");
 }
+
+export async function rejectRole(userId: string) {
+  await requireRole(["SYSTEM_ADMIN"]);
+  await deleteUser(userId);
+  revalidatePath("/admin");
+  revalidatePath("/pending-role");
+  revalidatePath("/");
+}
+
+export async function bulkRejectRoles(userIds: string[]) {
+  await requireRole(["SYSTEM_ADMIN"]);
+  await Promise.all(userIds.map((id) => deleteUser(id)));
+  revalidatePath("/admin");
+  revalidatePath("/pending-role");
+  revalidatePath("/");
+}
+

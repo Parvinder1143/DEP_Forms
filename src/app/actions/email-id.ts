@@ -24,6 +24,7 @@ import { getWorkflowStageMode, getWorkflowStageRoleCodes } from "@/lib/workflow-
 import { getWorkflow } from "@/lib/workflow-engine";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { checkHodDepartmentAccess } from "@/lib/department-store";
 
 // Mirrors the Prisma enum – safe to use before client generation
 export type ForwardingSection =
@@ -71,6 +72,13 @@ async function resolveActionableStageForUser(formId: string) {
   const isSystemAdmin = activeRole === "SYSTEM_ADMIN";
   if (!isSystemAdmin && !roleCanApproveStage(stage, activeRole)) {
     throw new Error("You are not authorized for the current stage.");
+  }
+
+  if (activeRole === "HOD") {
+    const hasAccess = await checkHodDepartmentAccess(user.email, form.department);
+    if (!hasAccess) {
+      throw new Error("You are not authorized to approve requests for this department.");
+    }
   }
 
   return { user, activeRole, form, workflow, stageNumber, stage, isSystemAdmin };

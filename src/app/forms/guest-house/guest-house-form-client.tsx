@@ -30,7 +30,7 @@ function getTodayLocalDate() {
   return `${year}-${month}-${day}`;
 }
 
-export function GuestHouseFormClient() {
+export function GuestHouseFormClient({ departments }: { departments: { name: string }[] }) {
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [roomType, setRoomType] = useState<"executive_suite" | "business_room" | "">("");
@@ -382,7 +382,13 @@ export function GuestHouseFormClient() {
               </div>
               <div>
                 <label className="label">Department *</label>
-                <input name="proposerDepartment" required className="input" />
+                <select name="proposerDepartment" required className="input">
+                  <option value="">Select</option>
+                  {departments.map((d) => (
+                    <option key={d.name} value={d.name}>{d.name}</option>
+                  ))}
+                  <option value="Other">Other</option>
+                </select>
               </div>
               <div>
                 <label className="label">Employee Code</label>

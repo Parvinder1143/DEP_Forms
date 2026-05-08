@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { assignRole, createAssignableRole } from "@/app/actions/auth";
+import { assignRole } from "@/app/actions/auth";
 import type { AppRole } from "@/lib/mock-db";
 import { BUILT_IN_ROLE_OPTIONS, getRoleLabel } from "@/lib/roles";
+import { BulkUserUploadClient } from "@/components/admin/bulk-user-upload-client";
 
 export function toDisplayRole(role: AppRole | null | string, customRoleLabels?: Record<string, string>) {
   return getRoleLabel(role, customRoleLabels);
@@ -19,9 +20,11 @@ type UserRow = {
 
 export function UsersClient({
   initialUsers,
+  assignableRoles,
   customRoleLabels,
 }: {
   initialUsers: UserRow[];
+  assignableRoles: AppRole[];
   customRoleLabels?: Record<string, string>;
 }) {
   const [searchQuery, setSearchQuery] = useState("");
@@ -73,31 +76,8 @@ export function UsersClient({
         </div>
       </div>
 
-      <div className="mb-5 rounded-xl border border-indigo-200 bg-indigo-50/60 p-4">
-        <h3 className="text-sm font-semibold text-indigo-900">Add New Assignable Role</h3>
-        <p className="mt-1 text-xs text-indigo-700">
-          Create a new role code and display name to make it available in assignment dropdowns.
-        </p>
-        <form action={createAssignableRole} className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-          <input
-            name="roleCode"
-            className="input"
-            placeholder="Role code (e.g. LIBRARY_ADMIN)"
-            required
-          />
-          <input
-            name="displayName"
-            className="input"
-            placeholder="Display name (e.g. Library Admin)"
-            required
-          />
-          <button
-            type="submit"
-            className="h-10 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-700"
-          >
-            Add Role
-          </button>
-        </form>
+      <div className="mb-5">
+        <BulkUserUploadClient validRoles={assignableRoles} />
       </div>
 
       <div>

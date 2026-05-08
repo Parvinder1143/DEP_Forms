@@ -27,6 +27,7 @@ import {
 } from "@/lib/workflow-stage-approvals";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { checkHodDepartmentAccess } from "@/lib/department-store";
 
 async function getGuestHouseWorkflowOrThrow() {
   const workflow = await getWorkflow("guest-house");
@@ -72,6 +73,22 @@ async function resolveGuestHouseActionContext(submissionId: string) {
     const roleStages = getStagesForRole(workflow, roleContext.activeRole);
     if (!roleStages.includes(form.currentStage)) {
       throw new Error("You are not authorized for the current stage.");
+    }
+  }
+
+  if (roleContext.activeRole === "HOD") {
+    let hasAccess = false;
+    for (const proposer of form.proposers) {
+      if (proposer.department) {
+        const canAccess = await checkHodDepartmentAccess(roleContext.user.email, proposer.department);
+        if (canAccess) {
+          hasAccess = true;
+          break;
+        }
+      }
+    }
+    if (!hasAccess && form.proposers.length > 0) {
+      throw new Error("You are not authorized to approve requests for this department.");
     }
   }
 
@@ -581,6 +598,20 @@ export async function bulkReviewGuestHouseForms(input: {
     }
     if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
       continue;
+    }
+
+    if (activeRole === "HOD") {
+      let hasAccess = false;
+      for (const proposer of form.proposers) {
+        if (proposer.department) {
+          const canAccess = await checkHodDepartmentAccess(user.email, proposer.department);
+          if (canAccess) {
+            hasAccess = true;
+            break;
+          }
+        }
+      }
+      if (!hasAccess && form.proposers.length > 0) continue;
     }
 
     if (input.stage === 1) {

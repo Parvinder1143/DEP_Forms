@@ -7,6 +7,7 @@ import {
   listUsers as listUsersInMemory,
   updateUserPassword as updateUserPasswordInMemory,
   updateUserRole as updateUserRoleInMemory,
+  deleteUser as deleteUserInMemory,
 } from "@/lib/mock-db";
 
 export type PersistedUser = {
@@ -657,7 +658,11 @@ export async function setStudentRoleRequestTag(userId: string, isStudentRequest:
       throw new Error("User not found.");
     }
 
-    user.department = isStudentRequest ? STUDENT_ROLE_REQUEST_TAG : null;
+    if (isStudentRequest) {
+      user.department = STUDENT_ROLE_REQUEST_TAG;
+    } else if (user.department === STUDENT_ROLE_REQUEST_TAG) {
+      user.department = null;
+    }
     user.updatedAt = new Date();
     return user;
   }
@@ -671,7 +676,62 @@ export async function setStudentRoleRequestTag(userId: string, isStudentRequest:
       throw new Error("User not found.");
     }
 
-    user.department = isStudentRequest ? STUDENT_ROLE_REQUEST_TAG : null;
+    if (isStudentRequest) {
+      user.department = STUDENT_ROLE_REQUEST_TAG;
+    } else if (user.department === STUDENT_ROLE_REQUEST_TAG) {
+      user.department = null;
+    }
+    user.updatedAt = new Date();
+    return user;
+  }
+
+  const updated = await pool.query(
+    `
+    UPDATE app_users
+    SET department = CASE 
+                       WHEN $2::boolean THEN $3
+                       WHEN department = $3 THEN NULL
+                       ELSE department
+                     END,
+        updated_at = NOW()
+    WHERE id = $1
+    RETURNING id, email, full_name, department, role, created_at, updated_at
+  `,
+    [userId, isStudentRequest, STUDENT_ROLE_REQUEST_TAG]
+  );
+
+  if (updated.rowCount === 0) {
+    throw new Error("User not found.");
+  }
+
+  return mapRow(updated.rows[0]);
+}
+
+export async function setPreferredRoleForUser(userId: string, roleCode: string) {
+  if (!roleCode) return;
+
+  if (!hasDatabaseUrl()) {
+    const users = listUsersInMemory();
+    const user = users.find((entry) => entry.id === userId);
+    if (!user) {
+      throw new Error("User not found.");
+    }
+
+    user.department = `PREFERRED_ROLE:${roleCode}`;
+    user.updatedAt = new Date();
+    return user;
+  }
+
+  await ensureSchemaAndSeed();
+  const pool = getPgPool();
+  if (!pool) {
+    const users = listUsersInMemory();
+    const user = users.find((entry) => entry.id === userId);
+    if (!user) {
+      throw new Error("User not found.");
+    }
+
+    user.department = `PREFERRED_ROLE:${roleCode}`;
     user.updatedAt = new Date();
     return user;
   }
@@ -684,7 +744,7 @@ export async function setStudentRoleRequestTag(userId: string, isStudentRequest:
     WHERE id = $1
     RETURNING id, email, full_name, department, role, created_at, updated_at
   `,
-    [userId, isStudentRequest ? STUDENT_ROLE_REQUEST_TAG : null]
+    [userId, `PREFERRED_ROLE:${roleCode}`]
   );
 
   if (updated.rowCount === 0) {
@@ -692,4 +752,38 @@ export async function setStudentRoleRequestTag(userId: string, isStudentRequest:
   }
 
   return mapRow(updated.rows[0]);
+}
+
+export function getPreferredRole(user: Pick<PersistedUser, "department">): string | null {
+  if (!user.department || !user.department.startsWith("PREFERRED_ROLE:")) {
+    return null;
+  }
+  return user.department.substring("PREFERRED_ROLE:".length);
+}
+
+export async function deleteUser(userId: string) {
+  if (!hasDatabaseUrl()) {
+    return deleteUserInMemory(userId);
+  }
+
+  await ensureSchemaAndSeed();
+  const pool = getPgPool();
+  if (!pool) {
+    return deleteUserInMemory(userId);
+  }
+
+  const deleted = await pool.query(
+    `
+    DELETE FROM app_users
+    WHERE id = $1
+    RETURNING id, email, full_name, department, role, created_at, updated_at
+  `,
+    [userId]
+  );
+
+  if (deleted.rowCount === 0) {
+    throw new Error("User not found.");
+  }
+
+  return mapRow(deleted.rows[0]);
 }

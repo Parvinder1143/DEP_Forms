@@ -1,6 +1,7 @@
 import { requireApplicantFormAccess } from "@/lib/auth";
 import { EmailIdFormClient } from "./email-id-form-client";
 import { hasIssuedEmailForUser, listEmailIdFormsBySubmitter } from "@/lib/email-id-store";
+import { listDepartments } from "@/lib/department-store";
 import Link from "next/link";
 
 export default async function EmailIdFormPage() {
@@ -42,5 +43,7 @@ export default async function EmailIdFormPage() {
     );
   }
 
-  return <EmailIdFormClient />;
+  const departments = await listDepartments();
+
+  return <EmailIdFormClient departments={departments} />;
 }

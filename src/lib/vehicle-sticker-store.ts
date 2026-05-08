@@ -651,7 +651,7 @@ export async function listVehicleStickerFormsForAdmin() {
   return combineRecords(result.rows, approvalsMap, detailsMap);
 }
 
-export async function listVehicleStickerOngoingForms(department?: string | null) {
+export async function listVehicleStickerOngoingForms(departmentsFilter?: string[] | null) {
   const pool = getPgPool();
   if (!pool) {
     return [] as VehicleStickerFormRecord[];
@@ -663,9 +663,9 @@ export async function listVehicleStickerOngoingForms(department?: string | null)
       AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)
   `;
 
-  if (department) {
-    params.push(department);
-    whereClause += ` AND fs.metadata->>'department' = $${params.length}`;
+  if (departmentsFilter && departmentsFilter.length > 0) {
+    params.push(departmentsFilter);
+    whereClause += ` AND fs.metadata->>'department' = ANY($${params.length})`;
   }
 
   const result = await pool.query(
@@ -705,7 +705,7 @@ export async function listVehicleStickerOngoingForms(department?: string | null)
   return combineRecords(result.rows, approvalsMap, detailsMap);
 }
 
-export async function listVehicleStickerCompletedForms(department?: string | null) {
+export async function listVehicleStickerCompletedForms(departmentsFilter?: string[] | null) {
   const pool = getPgPool();
   if (!pool) {
     return [] as VehicleStickerFormRecord[];
@@ -717,9 +717,9 @@ export async function listVehicleStickerCompletedForms(department?: string | nul
       AND fs.overall_status = 'approved'::submission_status
   `;
 
-  if (department) {
-    params.push(department);
-    whereClause += ` AND fs.metadata->>'department' = $${params.length}`;
+  if (departmentsFilter && departmentsFilter.length > 0) {
+    params.push(departmentsFilter);
+    whereClause += ` AND fs.metadata->>'department' = ANY($${params.length})`;
   }
 
   const result = await pool.query(

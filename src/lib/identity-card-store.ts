@@ -569,7 +569,7 @@ async function listByWhere(whereClause: string, values: unknown[] = []) {
 
 import { getNextStage, getWorkflow, getStagesForRole } from "@/lib/workflow-engine";
 
-export async function listActionableIdentityCardForms(activeRole: AppRole, department?: string | null) {
+export async function listActionableIdentityCardForms(activeRole: AppRole, departmentsFilter?: string[] | null) {
   const workflow = await getWorkflow("identity-card");
   if (!workflow) return [];
 
@@ -582,9 +582,9 @@ export async function listActionableIdentityCardForms(activeRole: AppRole, depar
   
   const params: unknown[] = [...validStages];
 
-  if (department) {
-    params.push(department);
-    whereClause += ` AND icd.department_snapshot = $${params.length}`;
+  if (departmentsFilter && departmentsFilter.length > 0) {
+    params.push(departmentsFilter);
+    whereClause += ` AND icd.department_snapshot = ANY($${params.length})`;
   }
 
   return listByWhere(whereClause, params);
@@ -602,25 +602,25 @@ export async function listIdentityCardFormsForStage(stageNumber: number, departm
   return listByWhere(whereClause, params);
 }
 
-export async function listIdentityCardCompletedForms(department?: string | null) {
+export async function listIdentityCardCompletedForms(departmentsFilter?: string[] | null) {
   let whereClause = "AND fs.overall_status IN ('approved'::submission_status, 'rejected'::submission_status)";
   const params: unknown[] = [];
 
-  if (department) {
-    params.push(department);
-    whereClause += ` AND icd.department_snapshot = $${params.length}`;
+  if (departmentsFilter && departmentsFilter.length > 0) {
+    params.push(departmentsFilter);
+    whereClause += ` AND icd.department_snapshot = ANY($${params.length})`;
   }
 
   return listByWhere(whereClause, params);
 }
 
-export async function listIdentityCardOngoingForms(department?: string | null) {
+export async function listIdentityCardOngoingForms(departmentsFilter?: string[] | null) {
   let whereClause = "AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)";
   const params: unknown[] = [];
 
-  if (department) {
-    params.push(department);
-    whereClause += ` AND icd.department_snapshot = $${params.length}`;
+  if (departmentsFilter && departmentsFilter.length > 0) {
+    params.push(departmentsFilter);
+    whereClause += ` AND icd.department_snapshot = ANY($${params.length})`;
   }
 
   return listByWhere(whereClause, params);

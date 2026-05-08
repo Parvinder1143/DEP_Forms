@@ -12,16 +12,7 @@ const ROLES = [
   "Tech Staff",
   "Administration",
 ];
-const DEPARTMENTS = [
-  "CSE",
-  "EE",
-  "IR",
-  "SA",
-  "Accounts",
-  "Establishment",
-  "Research & Development",
-  "Other",
-];
+
 const ENGAGEMENT_TYPES = [
   "Permanent",
   "Temp / Project Staff",
@@ -30,7 +21,7 @@ const ENGAGEMENT_TYPES = [
   "Guest",
 ];
 
-export function EmailIdFormClient() {
+export function EmailIdFormClient({ departments }: { departments: { name: string }[] }) {
   const [isPending, startTransition] = useTransition();
   const [natureOfEngagement, setNatureOfEngagement] = useState("");
   const [department, setDepartment] = useState("");
@@ -179,9 +170,10 @@ export function EmailIdFormClient() {
                   onChange={(e) => setDepartment(e.target.value)}
                 >
                   <option value="">Select</option>
-                  {DEPARTMENTS.map((d) => (
-                    <option key={d}>{d}</option>
+                  {departments.map((d) => (
+                    <option key={d.name}>{d.name}</option>
                   ))}
+                  <option value="Other">Other</option>
                 </select>
               </div>
               {department === "Other" && (

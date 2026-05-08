@@ -6,9 +6,11 @@ import { useMemo, useState } from "react";
 export function IdentityCardFormClient({
   userEmail,
   userFullName,
+  departments,
 }: {
   userEmail: string;
   userFullName: string;
+  departments: { name: string }[];
 }) {
   const [employmentType, setEmploymentType] = useState("");
   const [cardType, setCardType] = useState("");
@@ -71,7 +73,13 @@ export function IdentityCardFormClient({
               </div>
               <div>
                 <label className="label">Department / Center / School / Section *</label>
-                <input name="department" required className="input" />
+                <select name="department" required className="input">
+                  <option value="">Select</option>
+                  {departments.map((d) => (
+                    <option key={d.name} value={d.name}>{d.name}</option>
+                  ))}
+                  <option value="Other">Other</option>
+                </select>
               </div>
               <div>
                 <label className="label">Father&apos;s / Husband&apos;s Name *</label>

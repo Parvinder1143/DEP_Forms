@@ -28,3 +28,14 @@ export function generateStrongPassword(): string {
     .sort(() => Math.random() - 0.5)
     .join('');
 }
+
+// Generate a shorter random password of given length (default 8)
+export function generateRandomPassword(length = 8): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let pwd = '';
+  for (let i = 0; i < length; i++) {
+    const idx = Math.floor(Math.random() * chars.length);
+    pwd += chars[idx];
+  }
+  return pwd;
+}

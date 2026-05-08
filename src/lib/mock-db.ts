@@ -98,11 +98,20 @@ export type GuestHouseFormRecord = {
   status: GuestHouseFormStatus;
 };
 
+export type DepartmentRecord = {
+  id: string;
+  name: string;
+  hodEmail: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 type AppStore = {
   users: UserRecord[];
   forms: EmailIdFormRecord[];
   guestHouseForms: GuestHouseFormRecord[];
   approvals: EmailIdApprovalRecord[];
+  departments: DepartmentRecord[];
   seeded: boolean;
 };
 
@@ -127,6 +136,7 @@ function getStore(): AppStore {
       forms: [],
       guestHouseForms: [],
       approvals: [],
+      departments: [],
       seeded: false,
     };
   }
@@ -247,6 +257,18 @@ function ensureSeedData(store: AppStore) {
       role: "GUEST_HOUSE_COMMITTEE_CHAIR",
       password: "123456",
     },
+    {
+      email: "hod.cse@iitrpr.ac.in",
+      fullName: "HOD CSE",
+      role: "HOD",
+      password: "123456",
+    },
+    {
+      email: "hod.ee@iitrpr.ac.in",
+      fullName: "HOD EE",
+      role: "HOD",
+      password: "123456",
+    },
   ];
 
   for (const account of seedUsers) {
@@ -263,6 +285,24 @@ function ensureSeedData(store: AppStore) {
       password: account.password,
       fullName: account.fullName,
       role: account.role,
+    });
+  }
+
+  const seedDepartments: Array<{ name: string; hodEmail: string }> = [
+    { name: "Computer Science and Engineering", hodEmail: "hod.cse@iitrpr.ac.in" },
+    { name: "Electrical Engineering", hodEmail: "hod.ee@iitrpr.ac.in" },
+  ];
+
+  for (const dept of seedDepartments) {
+    const existing = store.departments.find((d) => d.name === dept.name);
+    if (existing) continue;
+
+    store.departments.push({
+      id: newId("dept"),
+      name: dept.name,
+      hodEmail: dept.hodEmail,
+      createdAt: now(),
+      updatedAt: now(),
     });
   }
 
@@ -366,6 +406,16 @@ export function updateUserPassword(email: string, newPassword: string) {
   user.password = newPassword;
   user.updatedAt = now();
   return user;
+}
+
+export function deleteUser(userId: string) {
+  const store = getStore();
+  const index = store.users.findIndex((u) => u.id === userId);
+  if (index === -1) {
+    throw new Error("User not found.");
+  }
+  const deleted = store.users.splice(index, 1)[0];
+  return deleted;
 }
 
 export function createEmailIdForm(input: Omit<EmailIdFormRecord, "id" | "createdAt" | "updatedAt" | "status">) {
@@ -595,4 +645,54 @@ export function listAllGuestHouseForms() {
   return [...store.guestHouseForms].sort(
     (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
   );
+}
+
+export function listDepartmentsInMemory() {
+  const store = getStore();
+  return [...store.departments].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function createDepartmentInMemory(input: { name: string; hodEmail: string }) {
+  const store = getStore();
+  if (store.departments.some((d) => d.name.toLowerCase() === input.name.toLowerCase())) {
+    throw new Error("Department with this name already exists.");
+  }
+  const dept: DepartmentRecord = {
+    id: newId("dept"),
+    name: input.name,
+    hodEmail: input.hodEmail,
+    createdAt: now(),
+    updatedAt: now(),
+  };
+  store.departments.push(dept);
+  return dept;
+}
+
+export function updateDepartmentInMemory(id: string, input: { name: string; hodEmail: string }) {
+  const store = getStore();
+  const index = store.departments.findIndex((d) => d.id === id);
+  if (index === -1) throw new Error("Department not found.");
+
+  if (
+    store.departments.some(
+      (d) => d.id !== id && d.name.toLowerCase() === input.name.toLowerCase()
+    )
+  ) {
+    throw new Error("Another department with this name already exists.");
+  }
+
+  store.departments[index] = {
+    ...store.departments[index],
+    name: input.name,
+    hodEmail: input.hodEmail,
+    updatedAt: now(),
+  };
+  return store.departments[index];
+}
+
+export function deleteDepartmentInMemory(id: string) {
+  const store = getStore();
+  const index = store.departments.findIndex((d) => d.id === id);
+  if (index === -1) throw new Error("Department not found.");
+  return store.departments.splice(index, 1)[0];
 }

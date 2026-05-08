@@ -26,6 +26,7 @@ import {
 } from "@/lib/workflow-stage-approvals";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { checkHodDepartmentAccess } from "@/lib/department-store";
 
 async function getIdentityCardWorkflowOrThrow() {
   const workflow = await getWorkflow("identity-card");
@@ -71,6 +72,15 @@ async function resolveIdentityCardActionContext(submissionId: string) {
     const roleStages = getStagesForRole(workflow, roleContext.activeRole);
     if (!roleStages.includes(form.currentStage)) {
       throw new Error("You are not authorized for the current stage.");
+    }
+  }
+
+  if (roleContext.activeRole === "HOD") {
+    if (form.departmentSnapshot) {
+      const hasAccess = await checkHodDepartmentAccess(roleContext.user.email, form.departmentSnapshot);
+      if (!hasAccess) {
+        throw new Error("You are not authorized to approve requests for this department.");
+      }
     }
   }
 
@@ -575,6 +585,11 @@ export async function bulkReviewIdentityCardForms(input: {
     }
     if (form.overallStatus === "approved" || form.overallStatus === "rejected") {
       continue;
+    }
+
+    if (activeRole === "HOD" && form.departmentSnapshot) {
+      const hasAccess = await checkHodDepartmentAccess(user.email, form.departmentSnapshot);
+      if (!hasAccess) continue;
     }
 
     if (input.stage === 1) {

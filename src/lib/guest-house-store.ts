@@ -595,7 +595,7 @@ export async function listGuestHouseFormsForStage(stageNumber: number) {
   );
 }
 
-export async function listActionableGuestHouseForms(userRole: string) {
+export async function listActionableGuestHouseForms(userRole: string, departmentsFilter?: string[] | null) {
   const pool = getPgPool();
   if (!pool) {
     return [] as GuestHouseFormRecord[];
@@ -655,9 +655,10 @@ export async function listActionableGuestHouseForms(userRole: string) {
     WHERE fs.form_type = 'guest_house_reservation'::form_type
       AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)
       AND fs.current_stage::text IN (SELECT stage_num FROM user_stages)
+      ${departmentsFilter && departmentsFilter.length > 0 ? `AND EXISTS (SELECT 1 FROM guest_house_proposers ghp WHERE ghp.guest_house_id = ghd.id AND ghp.department = ANY($2))` : ""}
     ORDER BY fs.created_at ASC
   `,
-    [userRole]
+    departmentsFilter && departmentsFilter.length > 0 ? [userRole, departmentsFilter] : [userRole]
   );
 
   const ids = result.rows.map((row) => String(row.submission_id));
@@ -666,22 +667,32 @@ export async function listActionableGuestHouseForms(userRole: string) {
   return combineRecords(result.rows, approvalsMap, proposersMap);
 }
 
-export async function listGuestHouseCompletedForms() {
-  return listGuestHouseBase(
-    `
+export async function listGuestHouseCompletedForms(departmentsFilter?: string[] | null) {
+  const params: unknown[] = [];
+  let whereClause = `
       AND fs.overall_status IN ('approved'::submission_status, 'rejected'::submission_status)
-    `,
-    []
-  );
+  `;
+
+  if (departmentsFilter && departmentsFilter.length > 0) {
+    params.push(departmentsFilter);
+    whereClause += ` AND EXISTS (SELECT 1 FROM guest_house_proposers ghp WHERE ghp.guest_house_id = ghd.id AND ghp.department = ANY($${params.length}))`;
+  }
+
+  return listGuestHouseBase(whereClause, params);
 }
 
-export async function listGuestHouseOngoingForms() {
-  return listGuestHouseBase(
-    `
+export async function listGuestHouseOngoingForms(departmentsFilter?: string[] | null) {
+  const params: unknown[] = [];
+  let whereClause = `
       AND fs.overall_status NOT IN ('approved'::submission_status, 'rejected'::submission_status, 'withdrawn'::submission_status)
-    `,
-    []
-  );
+  `;
+
+  if (departmentsFilter && departmentsFilter.length > 0) {
+    params.push(departmentsFilter);
+    whereClause += ` AND EXISTS (SELECT 1 FROM guest_house_proposers ghp WHERE ghp.guest_house_id = ghd.id AND ghp.department = ANY($${params.length}))`;
+  }
+
+  return listGuestHouseBase(whereClause, params);
 }
 
 export async function listGuestHouseFormsForAdmin() {

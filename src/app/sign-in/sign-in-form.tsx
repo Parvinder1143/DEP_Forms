@@ -3,6 +3,9 @@
 import Link from "next/link";
 import { useActionState, useEffect, useState } from "react";
 import { sendLoginOtp, signInWithEmail, signInWithOtp } from "@/app/actions/auth";
+import { getAvailableRoles } from "@/app/actions/roles";
+import { getRoleLabel } from "@/lib/roles";
+import type { AppRole } from "@/lib/mock-db";
 
 const initialState: { error?: string } = {};
 const otpInitialState: { error?: string; success?: string } = {};
@@ -24,7 +27,10 @@ export function SignInForm({ initialMode = "login", showModeToggle = true }: Sig
   const [otpVerifyKey, setOtpVerifyKey] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [showStudentPrompt, setShowStudentPrompt] = useState(false);
+
+  const [email, setEmail] = useState("");
+  const [preferredRole, setPreferredRole] = useState("");
+  const [availableRoles, setAvailableRoles] = useState<AppRole[]>([]);
 
   const [state, formAction, pending] = useActionState(
     async (_prev: { error?: string } | undefined, formData: FormData) => signInWithEmail(formData),
@@ -51,6 +57,19 @@ export function SignInForm({ initialMode = "login", showModeToggle = true }: Sig
       setOtpVerifyKey((current) => current + 1);
     }
   }, [mode]);
+
+  useEffect(() => {
+    // Fetch available roles on component mount
+    const fetchRoles = async () => {
+      try {
+        const roles = await getAvailableRoles();
+        setAvailableRoles(roles);
+      } catch (error) {
+        console.error("Failed to fetch roles:", error);
+      }
+    };
+    fetchRoles();
+  }, []);
 
   if (mode === "login" && loginMethod === "otp") {
     return (
@@ -125,40 +144,7 @@ export function SignInForm({ initialMode = "login", showModeToggle = true }: Sig
               />
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
-              <button
-                type="button"
-                onClick={() => setShowStudentPrompt((prev) => !prev)}
-                className="flex w-full items-center justify-between rounded-xl px-2 py-2 text-left text-xs font-semibold leading-relaxed text-slate-700 transition hover:bg-slate-100"
-              >
-                <span>Logging in for the first time as an IIT Ropar student?</span>
-                <svg
-                  className={`h-4 w-4 text-slate-500 transition-transform ${showStudentPrompt ? "rotate-180" : ""}`}
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                  aria-hidden="true"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-              </button>
 
-              {showStudentPrompt ? (
-                <div className="mt-2 border-t border-slate-200 pt-3">
-                  <label className="flex items-start gap-3 text-xs font-semibold leading-relaxed text-slate-700">
-                    <input
-                      type="checkbox"
-                      name="isStudentRequest"
-                      className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                    />
-                    <span>I am signing in as a student (@iitrpr.ac.in only).</span>
-                  </label>
-                </div>
-              ) : null}
-            </div>
 
             {otpVerifyState?.error ? (
               <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
@@ -231,11 +217,7 @@ export function SignInForm({ initialMode = "login", showModeToggle = true }: Sig
 
       <input type="hidden" name="mode" value={mode} />
 
-      <p className="rounded-xl border border-slate-100 bg-slate-50/70 px-4 py-3 text-xs font-semibold leading-relaxed text-slate-700">
-        {mode === "login"
-          ? "First time with your IIT Ropar email? Log in directly — your password will be saved for future logins."
-          : "Create your account with your institute email. Password must be at least 6 characters."}
-      </p>
+
 
       <div className="space-y-1.5">
         <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-gray-500">Email Address</label>
@@ -244,6 +226,14 @@ export function SignInForm({ initialMode = "login", showModeToggle = true }: Sig
           type="email"
           required
           placeholder="you@iitrpr.ac.in"
+          value={email}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            // Reset preferred role if switching away from @iitrpr.ac.in
+            if (!e.target.value.includes("@iitrpr.ac.in")) {
+              setPreferredRole("");
+            }
+          }}
           className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-900 shadow-inner placeholder:text-gray-400 transition focus:border-gray-900 focus:bg-white focus:outline-none focus:ring-4 focus:ring-emerald-100"
         />
       </div>
@@ -304,42 +294,29 @@ export function SignInForm({ initialMode = "login", showModeToggle = true }: Sig
         </div>
       ) : null}
 
-      {mode === "login" ? (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
-          <button
-            type="button"
-            onClick={() => setShowStudentPrompt((prev) => !prev)}
-            className="flex w-full items-center justify-between rounded-xl px-2 py-2 text-left text-xs font-semibold leading-relaxed text-slate-700 transition hover:bg-slate-100"
+      {mode === "signup" && email.includes("@iitrpr.ac.in") ? (
+        <div className="space-y-1.5">
+          <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-gray-500">Preferred Role (Optional)</label>
+          <p className="text-xs text-gray-500 mb-2">
+            Select a role if you know it. Admins will review and approve your request.
+          </p>
+          <select
+            name="preferredRole"
+            value={preferredRole}
+            onChange={(e) => setPreferredRole(e.target.value)}
+            className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-900 shadow-inner transition focus:border-gray-900 focus:bg-white focus:outline-none focus:ring-4 focus:ring-emerald-100"
           >
-            <span>Logging in for the first time as an IIT Ropar student?</span>
-            <svg
-              className={`h-4 w-4 text-slate-500 transition-transform ${showStudentPrompt ? "rotate-180" : ""}`}
-              viewBox="0 0 20 20"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <path
-                fillRule="evenodd"
-                d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
-                clipRule="evenodd"
-              />
-            </svg>
-          </button>
-
-          {showStudentPrompt ? (
-            <div className="mt-2 border-t border-slate-200 pt-3">
-              <label className="flex items-start gap-3 text-xs font-semibold leading-relaxed text-slate-700">
-                <input
-                  type="checkbox"
-                  name="isStudentRequest"
-                  className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                />
-                <span>I am signing in as a student (@iitrpr.ac.in only).</span>
-              </label>
-            </div>
-          ) : null}
+            <option value="">I don't have a preference</option>
+            {availableRoles.map((role) => (
+              <option key={role} value={role}>
+                {getRoleLabel(role)}
+              </option>
+            ))}
+          </select>
         </div>
       ) : null}
+
+
 
       {state?.error ? (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">

@@ -7,6 +7,7 @@ export const ADMIN_TABS = [
   { key: "role-requests", label: "Role Requests" },
   { key: "delegation-requests", label: "Delegation Requests" },
   { key: "users", label: "Users" },
+  { key: "departments", label: "Departments" },
   { key: "email-queue", label: "Email Queue" },
   { key: "vehicle-queue", label: "Vehicle Queue" },
   { key: "id-card-queue", label: "ID Card Queue" },
