@@ -100,6 +100,7 @@ Supported roles include:
 - Intern
 - Registrar
 - External Entity
+- Etc
 
 > Note:
 > External entities are restricted to filling only 2 forms.
