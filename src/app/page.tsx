@@ -364,7 +364,6 @@ export default async function Home() {
                 )}
               </div>
             )}
-
             {applicantFormAccess["guest-house"] && (
               <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white/95 shadow-md">
                 <div className="border-b border-gray-100 px-5 py-3 text-sm font-semibold text-gray-800">
@@ -377,7 +376,6 @@ export default async function Home() {
                 )}
               </div>
             )}
-
             {applicantFormAccess["hostel-undertaking"] && (
               <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white/95 shadow-md">
                 <div className="border-b border-gray-100 px-5 py-3 text-sm font-semibold text-gray-800">
