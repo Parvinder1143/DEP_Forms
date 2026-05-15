@@ -1,0 +1,108 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Email ID Form ────────────────────────────────────────────────────────────
+
+enum EmailIdFormStatus {
+  PENDING     // Submitted, awaiting Forwarding Authority
+  FORWARDED   // Forwarding Authority approved, awaiting IT Admin
+  ISSUED      // IT Admin has issued the email ID
+}
+
+enum ForwardingSection {
+  ACADEMICS
+  ESTABLISHMENT
+  RESEARCH_AND_DEVELOPMENT
+}
+
+enum AppRole {
+  STUDENT
+  EMPLOYEE
+  FORWARDING_AUTHORITY
+  IT_ADMIN
+  SYSTEM_ADMIN
+}
+
+model User {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  email    String   @unique
+  fullName String?
+  role     AppRole?
+
+  emailIdForms EmailIdForm[]
+}
+
+model EmailIdForm {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  submittedById String
+  submittedBy   User   @relation(fields: [submittedById], references: [id], onDelete: Restrict)
+
+  // ── Personal Details ──────────────────────────────────────────────────────
+  initials         String  // Dr. / Mr. / Ms.
+  firstName        String
+  lastName         String
+  gender           String
+  permanentAddress String
+
+  // ── Employment Details ────────────────────────────────────────────────────
+  orgId             String
+  natureOfEngagement String  // Permanent / Temp / Project / Contract etc.
+  role              String  // Student / Faculty / Non-tech staff / Tech staff / Administration
+  department        String  // CSE / EE / IR / SA / Accounts / Establishment etc.
+
+  // Shown only when natureOfEngagement is temp / project staff
+  projectName              String?
+  joiningDate              DateTime?
+  anticipatedEndDate       DateTime?
+  reportingOfficerName     String?
+  reportingOfficerEmail    String?
+
+  // ── Alternate Communication ───────────────────────────────────────────────
+  mobileNo       String
+  alternateEmail String
+
+  // ── Consent ───────────────────────────────────────────────────────────────
+  consentAccepted Boolean @default(false)
+
+  // ── Workflow Status ───────────────────────────────────────────────────────
+  status EmailIdFormStatus @default(PENDING)
+
+  // ── Relations ─────────────────────────────────────────────────────────────
+  approvals EmailIdApproval[]
+
+  @@index([submittedById])
+}
+
+model EmailIdApproval {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  formId String
+  form   EmailIdForm @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  // stage 1 = Forwarding Authority, stage 2 = IT Admin issuance
+  stage Int
+
+  // Stage 1 fields
+  forwardingSection ForwardingSection? // ACADEMICS / ESTABLISHMENT / RESEARCH_AND_DEVELOPMENT
+  approverName      String
+
+  // Stage 2 fields (IT Admin only)
+  assignedEmailId        String?
+  dateOfCreation         DateTime?
+  tentativeRemovalDate   DateTime?
+  idCreatedBy            String?
+}
